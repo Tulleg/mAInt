@@ -96,10 +96,11 @@ Antworte ausschließlich im JSON-Format:
     };
   }
 
-  // Strikte Validierung der generierten SQL-Abfrage (Schreibschutz-Guard)
-  const cleanSql = parsedPlan.sqlQuery.trim();
+  // Strikte Validierung der generierten SQL-Abfrage (Schreibschutz-Guard & Injection-Filter)
+  const cleanSql = parsedPlan.sqlQuery.trim().replace(/;+$/, ""); // Trailing Semikolons entfernen
   const lowerSql = cleanSql.toLowerCase();
 
+  // 1. Verbotene Schreib- und Systemoperationen
   const forbiddenKeywords = [
     "insert",
     "update",
@@ -111,16 +112,39 @@ Antworte ausschließlich im JSON-Format:
     "create",
     "exec",
     "execute",
+    "copy",
+    "call",
+    "set",
+    "vacuum",
+    "pg_sleep",
+    "pg_read_file",
+    "pg_write_file",
+    "information_schema",
+    "pg_catalog",
+    "pg_tables",
   ];
   for (const kw of forbiddenKeywords) {
-    // Regex für ganzes Wort
     if (new RegExp(`\\b${kw}\\b`, "i").test(lowerSql)) {
-      throw new Error(`Sicherheitsverletzung: Nicht-lesende Operation '${kw}' ist im Analytics-Agenten untersagt.`);
+      throw new Error(`Sicherheitsverletzung: Nicht-lesende oder privilegierte Operation '${kw}' ist im Analytics-Agenten untersagt.`);
     }
   }
 
+  // 2. Nur SELECT oder WITH (CTE) erlaubt
   if (!lowerSql.startsWith("select") && !lowerSql.startsWith("with")) {
     throw new Error("Ungültige SQL-Abfrage: Es sind ausschließlich SELECT-Statements erlaubt.");
+  }
+
+  // 3. Strikte Mandantentrennung erzwingen (Tenant Guard)
+  if (!cleanSql.includes(tenantId)) {
+    throw new Error("Sicherheitsverletzung: Die generierte SQL-Abfrage enthält keinen Filter auf den aktuellen Mandanten.");
+  }
+
+  // 4. Verbotene sensitive Tabellen / Spalten blockieren (Keine Passwörter, Hashes oder Tokens)
+  const sensitiveTokens = ["password_hash", "users", "api_key", "secret"];
+  for (const tok of sensitiveTokens) {
+    if (new RegExp(`\\b${tok}\\b`, "i").test(lowerSql)) {
+      throw new Error(`Sicherheitsverletzung: Zugriff auf sensitive Spalte oder Tabelle '${tok}' ist untersagt.`);
+    }
   }
 
   // Query sicher gegen PostgreSQL ausführen

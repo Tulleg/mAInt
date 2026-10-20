@@ -188,7 +188,12 @@ export async function POST(req: NextRequest) {
           payload.sapMaterialNr || payload.internalPartNumber,
           payload.quantity,
           payload.storageLocation,
-          { userId, unitPrice: payload.unitPrice, batchNumber: payload.batchNumber }
+          {
+            userId,
+            unitPrice: payload.unitPrice,
+            batchNumber: payload.batchNumber,
+            clientBookingOfflineId: clientMutationId, // Verhindert zuverlässig doppelte Buchungen!
+          }
         );
       }
 

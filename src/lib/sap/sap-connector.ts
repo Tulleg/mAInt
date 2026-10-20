@@ -50,7 +50,12 @@ export interface ISapConnector {
     materialNr: string,
     quantity: number,
     storageLocation?: string,
-    options?: { userId?: string; unitPrice?: number; batchNumber?: string }
+    options?: {
+      userId?: string;
+      unitPrice?: number;
+      batchNumber?: string;
+      clientBookingOfflineId?: string;
+    }
   ): Promise<SapBookingResult>;
   migrateOrderToSap(orderId: string): Promise<SapOrderMigrationResult>;
 }
@@ -73,7 +78,12 @@ export class NoOpSapConnector implements ISapConnector {
     materialNr: string,
     quantity: number,
     storageLocation?: string,
-    options?: { userId?: string; unitPrice?: number; batchNumber?: string }
+    options?: {
+      userId?: string;
+      unitPrice?: number;
+      batchNumber?: string;
+      clientBookingOfflineId?: string;
+    }
   ): Promise<SapBookingResult> {
     const part = await db.query.spareParts.findFirst({
       where: and(
@@ -98,7 +108,7 @@ export class NoOpSapConnector implements ISapConnector {
       })
       .where(eq(spareParts.id, part.id));
 
-    // Buchungssatz anlegen
+    // Buchungssatz anlegen inkl. Idempotency Key
     if (options?.userId) {
       await db.insert(orderSparePartBookings).values({
         tenantId: this.tenantId,
@@ -109,6 +119,7 @@ export class NoOpSapConnector implements ISapConnector {
         unitPriceSnapshot: (options.unitPrice ?? 0).toFixed(2),
         batchNumber: options.batchNumber || null,
         storageLocation: storageLocation || part.storageLocation || null,
+        clientBookingOfflineId: options.clientBookingOfflineId || null,
         sapSyncStatus: "NOT_APPLICABLE",
       });
     }
@@ -293,7 +304,12 @@ export class ODataSapConnector implements ISapConnector {
     materialNr: string,
     quantity: number,
     storageLocation?: string,
-    options?: { userId?: string; unitPrice?: number; batchNumber?: string }
+    options?: {
+      userId?: string;
+      unitPrice?: number;
+      batchNumber?: string;
+      clientBookingOfflineId?: string;
+    }
   ): Promise<SapBookingResult> {
     const payload = {
       orderId,
@@ -303,6 +319,7 @@ export class ODataSapConnector implements ISapConnector {
       batchNumber: options?.batchNumber,
       userId: options?.userId,
       unitPrice: options?.unitPrice,
+      clientBookingOfflineId: options?.clientBookingOfflineId,
     };
 
     try {
@@ -355,6 +372,7 @@ export class ODataSapConnector implements ISapConnector {
             quantityConsumed: quantity.toString(),
             unitPriceSnapshot: (options.unitPrice ?? 0).toFixed(2),
             storageLocation: storageLocation || part.storageLocation,
+            clientBookingOfflineId: options.clientBookingOfflineId || null,
             sapMaterialDocNr: sapDocNr,
             sapSyncStatus: "SYNCED",
             sapLastSyncedAt: new Date(),
