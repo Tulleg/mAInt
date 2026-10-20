@@ -470,7 +470,7 @@ export function InteractiveGanttPlanningBoard({
             </button>
           </div>
 
-          {/* Kalender Vor / Zurück Schalter mit Echtdatum */}
+          {/* Kalender Vor / Zurück Schalter mit Echtdatum & Date-Picker */}
           <div className="flex items-center gap-2 border-l border-neutral-800 pl-3">
             <Button
               variant="outline"
@@ -489,9 +489,29 @@ export function InteractiveGanttPlanningBoard({
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <span className="text-xs font-bold text-white min-w-[210px] text-center font-mono">
-                {timelineHeaderTitle}
-              </span>
+              
+              {/* Klickbare Datumsanzeige mit integriertem HTML5 Date-Picker */}
+              <label
+                title="Klicken, um ein beliebiges Wunschdatum im Kalender auszuwählen"
+                className="relative cursor-pointer flex items-center justify-center px-2 py-0.5 rounded hover:bg-neutral-800/80 transition-colors group"
+              >
+                <span className="text-xs font-bold text-white min-w-[210px] text-center font-mono group-hover:text-blue-400 flex items-center justify-center gap-1.5">
+                  <CalendarDays className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                  {timelineHeaderTitle}
+                </span>
+                <input
+                  type="date"
+                  value={formatDateToIso(currentAnchorDate)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    const [y, m, d] = val.split("-").map(Number);
+                    setCurrentAnchorDate(new Date(y, m - 1, d));
+                  }}
+                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                />
+              </label>
+
               <Button
                 variant="ghost"
                 size="icon"
