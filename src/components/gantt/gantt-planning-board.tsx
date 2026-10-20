@@ -212,21 +212,47 @@ export function InteractiveGanttPlanningBoard({
   }, [viewScope, currentAnchorDate, timelineColumns]);
 
   // Filterung: Welche Tasks sind in der aktuellen Ansicht sichtbar?
+  // Berücksichtigt auch mehrtägige Maßnahmen (z.B. 10 Tage, 20 Tage),
+  // die vor oder während des Zeitraums gestartet sind und hineinragen!
   const visibleTasksMap = useMemo(() => {
-    const visibleDateSet = new Set(timelineColumns.map((c) => c.dateIso));
+    if (timelineColumns.length === 0) return new Map<string, GanttOrderTask[]>();
+
+    const firstColIso = timelineColumns[0].dateIso;
+    const lastColIso = timelineColumns[timelineColumns.length - 1].dateIso;
+    const firstColTime = new Date(firstColIso).getTime();
+    const lastColTime = new Date(lastColIso).getTime() + 24 * 60 * 60 * 1000 - 1; // Bis Ende des letzten Tages
+
     const map = new Map<string, GanttOrderTask[]>();
 
     tasks.forEach((t) => {
       if (!t.technicianId) return; // Ungeplante bleiben im Eingang
-      if (visibleDateSet.has(t.executionDate)) {
-        const list = map.get(t.technicianId) || [];
-        list.push(t);
-        map.set(t.technicianId, list);
+
+      if (viewScope === "day") {
+        // Tagesansicht: Exakter Tag
+        if (t.executionDate === firstColIso) {
+          const list = map.get(t.technicianId) || [];
+          list.push(t);
+          map.set(t.technicianId, list);
+        }
+      } else {
+        // Wochen- und Monatsansicht: Berechne Start und Ende der Maßnahme in Millisekunden
+        const taskStartTime = new Date(t.executionDate).getTime();
+        const taskDurationDays = t.durationDays || 1;
+        const taskEndTime = taskStartTime + taskDurationDays * 24 * 60 * 60 * 1000 - 1;
+
+        // Liegt die Maßnahme ganz oder teilweise im sichtbaren Zeitraum?
+        const isOverlapping = taskStartTime <= lastColTime && taskEndTime >= firstColTime;
+
+        if (isOverlapping) {
+          const list = map.get(t.technicianId) || [];
+          list.push(t);
+          map.set(t.technicianId, list);
+        }
       }
     });
 
     return map;
-  }, [tasks, timelineColumns]);
+  }, [tasks, timelineColumns, viewScope]);
 
   const unplannedTasks = useMemo(() => tasks.filter((t) => !t.technicianId), [tasks]);
 
@@ -319,6 +345,7 @@ export function InteractiveGanttPlanningBoard({
               technicianId: techId,
               technicianName: tech?.name || "Zugewiesen",
               executionDate: targetCol?.dateIso || t.executionDate,
+              durationDays: t.durationDays || 1,
             };
           }
 
@@ -377,9 +404,14 @@ export function InteractiveGanttPlanningBoard({
             const newMinutes = Math.max(15, Math.min(480, resizingTask.initialVal + deltaMinutes));
             return { ...t, durationMinutes: newMinutes };
           } else {
-            const stepPx = viewScope === "week" ? 100 : 35;
+            // Wochen- oder Monatsansicht: Schrittweite entspricht der Breite eines Tages (1 Tag = Spaltenbreite)
+            // 7 Tage in der Woche -> ca. 100px; 31 Tage im Monat -> ca. 25-35px
+            const totalCols = timelineColumns.length || 7;
+            // Wir berechnen die Spaltenbreite dynamisch
+            const stepPx = viewScope === "week" ? 90 : 28;
             const deltaDays = Math.round(diff / stepPx);
-            const newDays = Math.max(1, Math.min(7, resizingTask.initialVal + deltaDays));
+            // Eine Störung / Revision kann bis zu 60 Tage lang sein!
+            const newDays = Math.max(1, Math.min(60, resizingTask.initialVal + deltaDays));
             return { ...t, durationDays: newDays };
           }
         }
@@ -594,15 +626,27 @@ export function InteractiveGanttPlanningBoard({
                             leftPercent = (offsetMinutes / TOTAL_DAY_MINUTES) * 100;
                             widthPercent = (task.durationMinutes / TOTAL_DAY_MINUTES) * 100;
                           } else {
-                            // Wochen- oder Monatsansicht
-                            const colIdx = timelineColumns.findIndex(
-                              (c) => c.dateIso === task.executionDate
+                            // Wochen- oder Monatsansicht: Exaktes Einrasten auf die Spalten
+                            const firstColIso = timelineColumns[0]?.dateIso || "";
+                            const firstColTime = new Date(firstColIso).getTime();
+                            const taskStartTime = new Date(task.executionDate).getTime();
+                            const oneDayMs = 24 * 60 * 60 * 1000;
+
+                            // Berechne relative Tage ab Start der Ansicht
+                            const dayOffset = Math.round((taskStartTime - firstColTime) / oneDayMs);
+                            const totalDays = timelineColumns.length;
+
+                            // Start kann auch vor dem sichtbaren Fenster liegen (Clipping)
+                            const visibleStartDay = Math.max(0, dayOffset);
+                            const taskDurationDays = task.durationDays || 1;
+                            // Wie viele Tage ragen in den sichtbaren Bereich?
+                            const visibleDaysSpan = Math.max(
+                              1,
+                              Math.min(totalDays - visibleStartDay, taskDurationDays - (visibleStartDay - dayOffset))
                             );
-                            if (colIdx >= 0) {
-                              leftPercent = (colIdx / timelineColumns.length) * 100;
-                              const days = task.durationDays || 1;
-                              widthPercent = (days / timelineColumns.length) * 100;
-                            }
+
+                            leftPercent = (visibleStartDay / totalDays) * 100;
+                            widthPercent = (visibleDaysSpan / totalDays) * 100;
                           }
 
                           widthPercent = Math.min(widthPercent, 100 - leftPercent);
@@ -950,31 +994,54 @@ export function InteractiveGanttPlanningBoard({
                     />
                   </div>
 
-                  {/* Dauer in Minuten */}
+                  {/* Dauer in Minuten & Tage */}
                   <div>
                     <label className="text-[11px] font-medium text-neutral-400 block mb-1">
-                      Dauer (Minuten):
+                      Dauer ({viewScope === "day" ? "Minuten" : "Tage"}):
                     </label>
                     <div className="flex items-center gap-1.5">
-                      <input
-                        type="number"
-                        step={15}
-                        min={15}
-                        max={480}
-                        value={selectedTaskForDetails.durationMinutes}
-                        onChange={(e) => {
-                          const mins = Math.max(15, parseInt(e.target.value) || 15);
-                          const updated = {
-                            ...selectedTaskForDetails,
-                            durationMinutes: mins,
-                          };
-                          setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-                          setSelectedTaskForDetails(updated);
-                          if (onTaskUpdate) onTaskUpdate(updated);
-                        }}
-                        className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                      <span className="text-[11px] text-neutral-400 font-mono">min</span>
+                      {viewScope === "day" ? (
+                        <input
+                          type="number"
+                          step={15}
+                          min={15}
+                          max={480}
+                          value={selectedTaskForDetails.durationMinutes}
+                          onChange={(e) => {
+                            const mins = Math.max(15, parseInt(e.target.value) || 15);
+                            const updated = {
+                              ...selectedTaskForDetails,
+                              durationMinutes: mins,
+                            };
+                            setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                            setSelectedTaskForDetails(updated);
+                            if (onTaskUpdate) onTaskUpdate(updated);
+                          }}
+                          className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      ) : (
+                        <input
+                          type="number"
+                          step={1}
+                          min={1}
+                          max={90}
+                          value={selectedTaskForDetails.durationDays || 1}
+                          onChange={(e) => {
+                            const days = Math.max(1, Math.min(90, parseInt(e.target.value) || 1));
+                            const updated = {
+                              ...selectedTaskForDetails,
+                              durationDays: days,
+                            };
+                            setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                            setSelectedTaskForDetails(updated);
+                            if (onTaskUpdate) onTaskUpdate(updated);
+                          }}
+                          className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      )}
+                      <span className="text-[11px] text-neutral-400 font-mono">
+                        {viewScope === "day" ? "min" : "Tage"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -984,27 +1051,49 @@ export function InteractiveGanttPlanningBoard({
                   <span className="text-[10px] text-neutral-500 uppercase font-semibold mr-1">
                     Schnellwahl:
                   </span>
-                  {[15, 30, 45, 60, 90, 120, 180, 240].map((mins) => (
-                    <button
-                      key={mins}
-                      onClick={() => {
-                        const updated = {
-                          ...selectedTaskForDetails,
-                          durationMinutes: mins,
-                        };
-                        setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-                        setSelectedTaskForDetails(updated);
-                        if (onTaskUpdate) onTaskUpdate(updated);
-                      }}
-                      className={`px-2 py-0.5 rounded border text-[10px] font-mono transition-colors ${
-                        selectedTaskForDetails.durationMinutes === mins
-                          ? "bg-blue-600 border-blue-500 text-white font-bold"
-                          : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white"
-                      }`}
-                    >
-                      {mins}m
-                    </button>
-                  ))}
+                  {viewScope === "day"
+                    ? [15, 30, 45, 60, 90, 120, 180, 240].map((mins) => (
+                        <button
+                          key={mins}
+                          onClick={() => {
+                            const updated = {
+                              ...selectedTaskForDetails,
+                              durationMinutes: mins,
+                            };
+                            setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                            setSelectedTaskForDetails(updated);
+                            if (onTaskUpdate) onTaskUpdate(updated);
+                          }}
+                          className={`px-2 py-0.5 rounded border text-[10px] font-mono transition-colors ${
+                            selectedTaskForDetails.durationMinutes === mins
+                              ? "bg-blue-600 border-blue-500 text-white font-bold"
+                              : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white"
+                          }`}
+                        >
+                          {mins}m
+                        </button>
+                      ))
+                    : [1, 2, 3, 5, 7, 10, 14, 21, 30].map((days) => (
+                        <button
+                          key={days}
+                          onClick={() => {
+                            const updated = {
+                              ...selectedTaskForDetails,
+                              durationDays: days,
+                            };
+                            setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                            setSelectedTaskForDetails(updated);
+                            if (onTaskUpdate) onTaskUpdate(updated);
+                          }}
+                          className={`px-2 py-0.5 rounded border text-[10px] font-mono transition-colors ${
+                            (selectedTaskForDetails.durationDays || 1) === days
+                              ? "bg-blue-600 border-blue-500 text-white font-bold"
+                              : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white"
+                          }`}
+                        >
+                          {days} Tage
+                        </button>
+                      ))}
                 </div>
               </div>
 
