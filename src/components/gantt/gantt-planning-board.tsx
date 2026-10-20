@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import {
   Calendar,
   Layers,
   CalendarDays,
+  Sparkles,
 } from "lucide-react";
 
 export interface GanttOrderTask {
@@ -539,19 +541,31 @@ export function InteractiveGanttPlanningBoard({
           </div>
         </div>
 
-        {/* Gruppierung nach Techniker oder Qualifikation */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-neutral-400 flex items-center gap-1">
-            <Filter className="h-3 w-3" /> Gruppierung:
-          </span>
-          <select
-            value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as any)}
-            className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2.5 text-xs text-neutral-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
-            <option value="technician">Nach Servicetechniker</option>
-            <option value="qualification">Nach Fachqualifikation</option>
-          </select>
+        {/* Gruppierung & Neue Störung anlegen */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-neutral-400 flex items-center gap-1">
+              <Filter className="h-3 w-3" /> Gruppierung:
+            </span>
+            <select
+              value={groupBy}
+              onChange={(e) => setGroupBy(e.target.value as any)}
+              className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2.5 text-xs text-neutral-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="technician">Nach Servicetechniker</option>
+              <option value="qualification">Nach Fachqualifikation</option>
+            </select>
+          </div>
+
+          <Link href="/orders/new">
+            <Button
+              size="sm"
+              className="h-8 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium flex items-center gap-1.5 shadow-sm"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-blue-200" />
+              + Neue Störung melden
+            </Button>
+          </Link>
         </div>
       </div>
 

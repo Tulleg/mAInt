@@ -24,7 +24,7 @@ export interface WorkflowTransitionResult {
 export class WorkflowViolationError extends Error {
   constructor(message: string, public code: string) {
     super(message);
-    name = "WorkflowViolationError";
+    this.name = "WorkflowViolationError";
   }
 }
 

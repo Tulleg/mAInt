@@ -165,17 +165,21 @@ function normalizeToTargetDimensions(vec: number[], targetDim: number): number[]
  */
 export async function getAiProvider(tenantId?: string): Promise<ILlmProvider> {
   if (tenantId) {
-    const tenant = await db.query.tenants.findFirst({
-      where: eq(tenants.id, tenantId),
-    });
-
-    if (tenant?.aiConfig) {
-      return new OpenAiCompatibleProvider({
-        baseUrl: tenant.aiConfig.endpointUrl,
-        chatModel: tenant.aiConfig.chatModel,
-        embeddingModel: tenant.aiConfig.embeddingModel,
-        embeddingDimensions: tenant.aiConfig.embeddingDimensions,
+    try {
+      const tenant = await db.query.tenants.findFirst({
+        where: eq(tenants.id, tenantId),
       });
+
+      if (tenant?.aiConfig) {
+        return new OpenAiCompatibleProvider({
+          baseUrl: tenant.aiConfig.endpointUrl,
+          chatModel: tenant.aiConfig.chatModel,
+          embeddingModel: tenant.aiConfig.embeddingModel,
+          embeddingDimensions: tenant.aiConfig.embeddingDimensions,
+        });
+      }
+    } catch {
+      // Datenbank nicht verfügbar -> Globaler Fallback
     }
   }
 

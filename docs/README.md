@@ -37,6 +37,10 @@ Willkommen im zentralen Anwender- und Betriebshandbuch für **MaintAI**, der ind
    - Arbeiten ohne Netzwerk (Dexie.js / IndexedDB)
    - Lokale Mutations-Outbox & automatische Hintergrund-Synchronisation
    - Visueller Statusindikator in der Navigation
+9. [KI-gestützte Störungserfassung & Auftragsanlage](./08-ki-stoerungserfassung.md)
+   - KI-Prompt-Modus mit automatischer Pflichtfeld-Rückfrage (Clarification Loop)
+   - Manuelles Formular mit Echtzeit-Copilot (Duplikatwarnung & Ersatzteilvorschläge)
+   - Offline-First Pufferung & nahtlose Weiterleitung ins Planungsboard
 
 ---
 

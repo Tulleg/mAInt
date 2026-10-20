@@ -8,11 +8,21 @@ import {
   GitBranch,
   ShieldCheck,
   Wifi,
+  Sparkles,
+  PlusCircle,
 } from "lucide-react";
 import { OfflineSyncStatusIndicator } from "@/components/layout/offline-sync-indicator";
 
 export default function HomePage() {
   const modules = [
+    {
+      title: "KI-Störungserfassung",
+      desc: "Prompt-basierte & manuelle Störungserfassung mit automatischer KI-Rückfrage bei fehlenden Pflichtfeldern, Duplikaterkennung & Offline-Puffer.",
+      href: "/orders/new",
+      icon: Sparkles,
+      badge: "KI & Sprache",
+      color: "border-blue-500/50 hover:border-blue-400 bg-blue-950/20",
+    },
     {
       title: "Gantt Planungsboard",
       desc: "Grafische Einsatzdisposition mit Drag-&-Drop, Qualifikations-Matrix, Arbeitszeit-Resize & SAP-Ersatzteil-Konflikten.",
@@ -76,6 +86,13 @@ export default function HomePage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link
+            href="/orders/new"
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-blue-200" />
+            + Störung melden
+          </Link>
           <OfflineSyncStatusIndicator />
         </div>
       </div>
