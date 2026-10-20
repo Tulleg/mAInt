@@ -17,13 +17,9 @@ import {
   Clock,
   ExternalLink,
   X,
-  FileCheck,
-  CheckCircle2,
   Calendar,
   Layers,
-  MapPin,
-  Tag,
-  ShieldAlert,
+  CalendarDays,
 } from "lucide-react";
 
 export interface GanttOrderTask {
@@ -39,10 +35,10 @@ export interface GanttOrderTask {
   technicianId?: string | null;
   technicianName?: string | null;
   qualificationRequired?: string;
-  startMinutes: number; // 360 (06:00) bis 1200 (20:00)
+  executionDate: string; // ISO Datum z.B. "2026-10-20"
+  startMinutes: number; // 360 (06:00) bis 1260 (21:00)
   durationMinutes: number; // Mindestens 15 Minuten
-  dayOfWeek?: number; // 0 = Mo bis 5 = Sa
-  durationDays?: number;
+  durationDays?: number; // Für Wochen-/Monatsansicht
   hasStockConflict?: boolean;
   missingPartName?: string;
   sapOrderNr?: string;
@@ -62,19 +58,11 @@ interface InteractiveGanttProps {
 }
 
 const START_OF_DAY_MINUTES = 6 * 60; // 06:00 = 360 Min
-const END_OF_DAY_MINUTES = 21 * 60; // 21:00 = 1260 Min (damit der Slot 20:00 bis 21:00 eine volle Stunde umfasst!)
-const TOTAL_DAY_MINUTES = END_OF_DAY_MINUTES - START_OF_DAY_MINUTES; // 900 Min = genau 15 Stunden
-
+const END_OF_DAY_MINUTES = 21 * 60; // 21:00 = 1260 Min
+const TOTAL_DAY_MINUTES = END_OF_DAY_MINUTES - START_OF_DAY_MINUTES; // 900 Min = 15 Std
 const STEP_MINUTES = 15; // 15-Minuten Rasterung
-const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]; // 15 Spalten (6-7, 7-8, ..., 20-21)
-const WEEK_DAYS = [
-  { dayIndex: 0, label: "Montag", date: "20. Okt" },
-  { dayIndex: 1, label: "Dienstag", date: "21. Okt" },
-  { dayIndex: 2, label: "Mittwoch", date: "22. Okt" },
-  { dayIndex: 3, label: "Donnerstag", date: "23. Okt" },
-  { dayIndex: 4, label: "Freitag", date: "24. Okt" },
-  { dayIndex: 5, label: "Samstag", date: "25. Okt" },
-];
+
+const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]; // 15 Stunden-Spalten
 
 function formatMinutesToTime(totalMinutes: number): string {
   const h = Math.floor(totalMinutes / 60);
@@ -82,20 +70,34 @@ function formatMinutesToTime(totalMinutes: number): string {
   return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
 }
 
+function formatDateToIso(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 export function InteractiveGanttPlanningBoard({
   resources,
   initialTasks,
   onTaskUpdate,
 }: InteractiveGanttProps) {
+  // Zentraler Kalender-Anker: Startet bei heute (20. Okt 2026)
+  const [currentAnchorDate, setCurrentAnchorDate] = useState<Date>(new Date(2026, 9, 20));
+  const [viewScope, setViewScope] = useState<"day" | "week" | "month">("day");
+  const [groupBy, setGroupBy] = useState<"technician" | "qualification">("technician");
+
+  // Initialisierung der Aufträge mit echtem ISO-Ausführungsdatum
   const [tasks, setTasks] = useState<GanttOrderTask[]>(() => {
     return initialTasks.map((t, idx) => {
       const isUnplanned = idx >= 3;
-      // Konvertiere ggf. alte Stunden in Minuten
       const startMin = (t as any).startHour ? (t as any).startHour * 60 : t.startMinutes || (7 * 60 + (idx % 4) * 45);
       const durMin = (t as any).durationHours ? (t as any).durationHours * 60 : t.durationMinutes || 90;
+      
+      // Verteile die Tasks auf die Woche um den 20. Okt 2026
+      const taskDate = new Date(2026, 9, 20);
+      taskDate.setDate(taskDate.getDate() + (idx % 4));
 
       return {
         ...t,
+        executionDate: t.executionDate || formatDateToIso(taskDate),
         description: t.description || "Reguläre Instandhaltungsmaßnahme gemäß Prüfvorschrift.",
         equipmentNumber: t.equipmentNumber || "EQ-10042",
         functionalLocationCode: t.functionalLocationCode || "W1-HALLE2-LINIE4",
@@ -103,15 +105,10 @@ export function InteractiveGanttPlanningBoard({
         technicianName: isUnplanned ? null : t.technicianName || resources[idx % resources.length]?.name,
         startMinutes: startMin,
         durationMinutes: durMin,
-        dayOfWeek: t.dayOfWeek ?? (idx % 5),
-        durationDays: t.durationDays ?? 1,
+        durationDays: t.durationDays ?? (idx === 0 ? 2 : 1),
       };
     });
   });
-
-  const [viewScope, setViewScope] = useState<"day" | "week">("day");
-  const [groupBy, setGroupBy] = useState<"technician" | "qualification">("technician");
-  const [currentWeekOffset, setCurrentWeekOffset] = useState<number>(0);
 
   // Detail Modal / Popup State
   const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<GanttOrderTask | null>(null);
@@ -124,6 +121,112 @@ export function InteractiveGanttPlanningBoard({
     initialX: number;
     initialVal: number;
   } | null>(null);
+
+  // 1. DYNAMISCHE KALENDER-BERECHNUNG FÜR TAG, WOCHE UND MONAT
+  const timelineColumns = useMemo(() => {
+    if (viewScope === "day") {
+      // 15 Stunden Spalten für den gewählten Tag
+      const dayIso = formatDateToIso(currentAnchorDate);
+      return HOURS.map((h) => ({
+        key: `hour-${h}`,
+        label: `${h.toString().padStart(2, "0")}:00`,
+        subLabel: "",
+        dateIso: dayIso,
+        hour: h,
+      }));
+    }
+
+    if (viewScope === "week") {
+      // 7 Wochentage ausgehend vom Montag der aktuellen Woche
+      const startOfWeek = new Date(currentAnchorDate);
+      const dayOfWeek = (startOfWeek.getDay() + 6) % 7; // 0 = Montag
+      startOfWeek.setDate(startOfWeek.getDate() - dayOfWeek);
+
+      const dayNames = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+      return Array.from({ length: 7 }).map((_, i) => {
+        const colDate = new Date(startOfWeek);
+        colDate.setDate(colDate.getDate() + i);
+        return {
+          key: `week-${formatDateToIso(colDate)}`,
+          label: dayNames[i],
+          subLabel: colDate.toLocaleDateString("de-DE", { day: "2-digit", month: "short" }),
+          dateIso: formatDateToIso(colDate),
+        };
+      });
+    }
+
+    // Monatsansicht: Alle Tage des aktuellen Monats (z.B. 31 Tage im Oktober)
+    const year = currentAnchorDate.getFullYear();
+    const month = currentAnchorDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    return Array.from({ length: daysInMonth }).map((_, i) => {
+      const colDate = new Date(year, month, i + 1);
+      const isWeekend = colDate.getDay() === 0 || colDate.getDay() === 6;
+      return {
+        key: `month-${formatDateToIso(colDate)}`,
+        label: `${i + 1}`,
+        subLabel: colDate.toLocaleDateString("de-DE", { weekday: "narrow" }),
+        dateIso: formatDateToIso(colDate),
+        isWeekend,
+      };
+    });
+  }, [viewScope, currentAnchorDate]);
+
+  // Kalendernavigation vor / zurück
+  const navigateTimeline = (direction: -1 | 1) => {
+    const next = new Date(currentAnchorDate);
+    if (viewScope === "day") {
+      next.setDate(next.getDate() + direction);
+    } else if (viewScope === "week") {
+      next.setDate(next.getDate() + direction * 7);
+    } else if (viewScope === "month") {
+      next.setMonth(next.getMonth() + direction);
+    }
+    setCurrentAnchorDate(next);
+  };
+
+  const jumpToToday = () => {
+    setCurrentAnchorDate(new Date(2026, 9, 20));
+  };
+
+  // Anzeige-Text im Kalender-Header
+  const timelineHeaderTitle = useMemo(() => {
+    if (viewScope === "day") {
+      return currentAnchorDate.toLocaleDateString("de-DE", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      });
+    }
+    if (viewScope === "week") {
+      const firstDay = timelineColumns[0]?.subLabel || "";
+      const lastDay = timelineColumns[6]?.subLabel || "";
+      return `Woche ${firstDay} – ${lastDay} ${currentAnchorDate.getFullYear()}`;
+    }
+    return currentAnchorDate.toLocaleDateString("de-DE", {
+      month: "long",
+      year: "numeric",
+    });
+  }, [viewScope, currentAnchorDate, timelineColumns]);
+
+  // Filterung: Welche Tasks sind in der aktuellen Ansicht sichtbar?
+  const visibleTasksMap = useMemo(() => {
+    const visibleDateSet = new Set(timelineColumns.map((c) => c.dateIso));
+    const map = new Map<string, GanttOrderTask[]>();
+
+    tasks.forEach((t) => {
+      if (!t.technicianId) return; // Ungeplante bleiben im Eingang
+      if (visibleDateSet.has(t.executionDate)) {
+        const list = map.get(t.technicianId) || [];
+        list.push(t);
+        map.set(t.technicianId, list);
+      }
+    });
+
+    return map;
+  }, [tasks, timelineColumns]);
 
   const unplannedTasks = useMemo(() => tasks.filter((t) => !t.technicianId), [tasks]);
 
@@ -161,7 +264,6 @@ export function InteractiveGanttPlanningBoard({
     e.dataTransfer.effectAllowed = "move";
     setDraggingTaskId(task.id);
 
-    // Berechne den Offset innerhalb des gegriffenen Balkens
     const cardRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const clickXInCard = e.clientX - cardRect.left;
     const cardWidth = cardRect.width || 1;
@@ -175,7 +277,7 @@ export function InteractiveGanttPlanningBoard({
     setDragOffsetMinutes(0);
   };
 
-  // 15-Minuten Drop-Berechnung
+  // Drop auf Zeitachse
   const handleDropOnGanttRow = (techId: string, e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (!draggingTaskId) return;
@@ -191,11 +293,8 @@ export function InteractiveGanttPlanningBoard({
           let updated: GanttOrderTask;
 
           if (viewScope === "day") {
-            // Berechne genaue Minute der Mausposition
             const mouseMinute = START_OF_DAY_MINUTES + clickPercent * TOTAL_DAY_MINUTES;
-            // Berücksichtige den Klick-Offset innerhalb des gezogenen Balkens
             const desiredStart = mouseMinute - dragOffsetMinutes;
-            // Snapping: Exakt auf das nächste 15-Minuten-Intervall einrasten!
             const snappedMinute = Math.round(desiredStart / STEP_MINUTES) * STEP_MINUTES;
             const maxStart = END_OF_DAY_MINUTES - t.durationMinutes;
             const safeStart = Math.max(START_OF_DAY_MINUTES, Math.min(maxStart, snappedMinute));
@@ -204,15 +303,22 @@ export function InteractiveGanttPlanningBoard({
               ...t,
               technicianId: techId,
               technicianName: tech?.name || "Zugewiesen",
+              executionDate: formatDateToIso(currentAnchorDate), // Tag der Tagesansicht übernehmen
               startMinutes: safeStart,
             };
           } else {
-            const dayIdx = Math.floor(clickPercent * WEEK_DAYS.length);
+            // Wochen- oder Monatsansicht: Berechne die Spalte (Tag)
+            const colIndex = Math.min(
+              timelineColumns.length - 1,
+              Math.floor(clickPercent * timelineColumns.length)
+            );
+            const targetCol = timelineColumns[colIndex];
+
             updated = {
               ...t,
               technicianId: techId,
               technicianName: tech?.name || "Zugewiesen",
-              dayOfWeek: Math.max(0, Math.min(5, dayIdx)),
+              executionDate: targetCol?.dateIso || t.executionDate,
             };
           }
 
@@ -247,7 +353,7 @@ export function InteractiveGanttPlanningBoard({
     setDraggingTaskId(null);
   };
 
-  // 15-Minuten Resize Handhabung
+  // Resize Handhabung
   const handleResizeMouseDown = (e: React.MouseEvent, task: GanttOrderTask) => {
     e.preventDefault();
     e.stopPropagation();
@@ -266,14 +372,14 @@ export function InteractiveGanttPlanningBoard({
       prev.map((t) => {
         if (t.id === resizingTask.id) {
           if (viewScope === "day") {
-            // ~15px = 15 Minuten Schrittweite
             const deltaSteps = Math.round(diff / 15);
             const deltaMinutes = deltaSteps * STEP_MINUTES;
             const newMinutes = Math.max(15, Math.min(480, resizingTask.initialVal + deltaMinutes));
             return { ...t, durationMinutes: newMinutes };
           } else {
-            const deltaDays = Math.round(diff / 100);
-            const newDays = Math.max(1, Math.min(5, resizingTask.initialVal + deltaDays));
+            const stepPx = viewScope === "week" ? 100 : 35;
+            const deltaDays = Math.round(diff / stepPx);
+            const newDays = Math.max(1, Math.min(7, resizingTask.initialVal + deltaDays));
             return { ...t, durationDays: newDays };
           }
         }
@@ -292,10 +398,10 @@ export function InteractiveGanttPlanningBoard({
       onMouseMove={handleGlobalMouseMove}
       onMouseUp={handleGlobalMouseUp}
     >
-      {/* Top Controls */}
+      {/* TOP CONTROLS & KALENDER-NAVIGATION */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-800 pb-3">
-        <div className="flex items-center gap-3">
-          {/* Umschalter Tag / Woche */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Umschalter Tag / Woche / Monat */}
           <div className="flex items-center bg-neutral-900 border border-neutral-800 rounded-lg p-0.5">
             <button
               type="button"
@@ -306,7 +412,7 @@ export function InteractiveGanttPlanningBoard({
                   : "text-neutral-400 hover:text-white"
               }`}
             >
-              Tagesansicht (15-Min Raster)
+              Tagesansicht
             </button>
             <button
               type="button"
@@ -319,35 +425,50 @@ export function InteractiveGanttPlanningBoard({
             >
               Wochenansicht
             </button>
+            <button
+              type="button"
+              onClick={() => setViewScope("month")}
+              className={`h-7 px-3 text-xs font-medium rounded-md transition-all ${
+                viewScope === "month"
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              Monatsansicht
+            </button>
           </div>
 
-          {/* Kalender Navigation */}
-          <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
+          {/* Kalender Vor / Zurück Schalter mit Echtdatum */}
+          <div className="flex items-center gap-2 border-l border-neutral-800 pl-3">
             <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setCurrentWeekOffset((prev) => prev - 1)}
-              className="h-7 w-7 text-neutral-400 hover:text-white"
+              variant="outline"
+              size="sm"
+              onClick={jumpToToday}
+              className="h-7 text-xs border-neutral-700 bg-neutral-900 text-neutral-200"
             >
-              <ChevronLeft className="h-4 w-4" />
+              Heute
             </Button>
-            <span className="text-xs font-semibold text-neutral-200 min-w-[160px] text-center">
-              {viewScope === "day"
-                ? currentWeekOffset === 0
-                  ? "Heute, 20. Oktober 2026"
-                  : `Tag ${currentWeekOffset > 0 ? `+${currentWeekOffset}` : currentWeekOffset}`
-                : currentWeekOffset === 0
-                ? "KW 43 (20. Okt – 25. Okt)"
-                : `Woche ${currentWeekOffset > 0 ? `+${currentWeekOffset}` : currentWeekOffset}`}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setCurrentWeekOffset((prev) => prev + 1)}
-              className="h-7 w-7 text-neutral-400 hover:text-white"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigateTimeline(-1)}
+                className="h-7 w-7 text-neutral-400 hover:text-white"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="text-xs font-bold text-white min-w-[210px] text-center font-mono">
+                {timelineHeaderTitle}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigateTimeline(1)}
+                className="h-7 w-7 text-neutral-400 hover:text-white"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -370,33 +491,30 @@ export function InteractiveGanttPlanningBoard({
       {/* HAUPTTEIL: GANTT PLANUNGSBOARD */}
       <Card className="border-neutral-800 bg-neutral-950 overflow-hidden shadow-2xl">
         <div className="flex flex-col w-full">
-          {/* Kopfzeile (Links: Ressourcen, Rechts: Zeitachse) */}
+          {/* Kopfzeile (Links: Ressourcen, Rechts: Dynamische Zeitachse) */}
           <div className="flex border-b border-neutral-800 bg-neutral-900/90 text-xs font-semibold text-neutral-400">
             <div className="w-72 shrink-0 p-3 border-r border-neutral-800 flex items-center gap-2 uppercase tracking-wider text-[11px]">
               <User className="h-3.5 w-3.5 text-blue-400" />
               Ressource & Qualifikation
             </div>
 
-            {/* Zeitraster Header */}
+            {/* Dynamisches Zeitraster */}
             <div className="flex-1 flex divide-x divide-neutral-800 overflow-hidden">
-              {viewScope === "day"
-                ? HOURS.map((h) => (
-                    <div
-                      key={h}
-                      className="flex-1 py-2.5 text-center text-[11px] font-mono text-neutral-400 bg-neutral-900/50"
-                    >
-                      {h.toString().padStart(2, "0")}:00
-                    </div>
-                  ))
-                : WEEK_DAYS.map((d) => (
-                    <div
-                      key={d.dayIndex}
-                      className="flex-1 py-2 text-center text-xs text-neutral-300 bg-neutral-900/50"
-                    >
-                      <span className="font-semibold block">{d.label}</span>
-                      <span className="text-[10px] text-neutral-500 font-mono">{d.date}</span>
-                    </div>
-                  ))}
+              {timelineColumns.map((col) => (
+                <div
+                  key={col.key}
+                  className={`flex-1 py-2 text-center text-xs ${
+                    (col as any).isWeekend ? "bg-neutral-900/90 text-neutral-500" : "bg-neutral-900/50 text-neutral-300"
+                  }`}
+                >
+                  <span className="font-semibold block font-mono text-[11px]">{col.label}</span>
+                  {col.subLabel && (
+                    <span className="text-[10px] text-neutral-500 font-mono block">
+                      {col.subLabel}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
@@ -412,10 +530,10 @@ export function InteractiveGanttPlanningBoard({
                 )}
 
                 {group.members.map((res) => {
-                  const techTasks = tasks.filter((t) => t.technicianId === res.id);
+                  const techTasks = visibleTasksMap.get(res.id) || [];
                   const totalMinutes = techTasks.reduce((acc, curr) => acc + curr.durationMinutes, 0);
                   const isOverbooked =
-                    viewScope === "day" ? totalMinutes > 8 * 60 : techTasks.length > 4;
+                    viewScope === "day" ? totalMinutes > 8 * 60 : techTasks.length > 5;
 
                   return (
                     <div
@@ -446,7 +564,7 @@ export function InteractiveGanttPlanningBoard({
                         <div className="text-[10px] text-neutral-500 font-mono">
                           {viewScope === "day"
                             ? `Geplant: ${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m / 8h`
-                            : `${techTasks.length} Aufträge eingeplant`}
+                            : `${techTasks.length} Aufträge im Zeitraum`}
                         </div>
                       </div>
 
@@ -456,9 +574,14 @@ export function InteractiveGanttPlanningBoard({
                         onDrop={(e) => handleDropOnGanttRow(res.id, e)}
                         className="flex-1 relative flex divide-x divide-neutral-900 bg-neutral-950"
                       >
-                        {/* 1-Stunden Hintergrundlinien */}
-                        {HOURS.map((_, i) => (
-                          <div key={i} className="flex-1 h-full pointer-events-none" />
+                        {/* Spalten-Hintergrund */}
+                        {timelineColumns.map((col, i) => (
+                          <div
+                            key={i}
+                            className={`flex-1 h-full pointer-events-none ${
+                              (col as any).isWeekend ? "bg-neutral-950/80" : ""
+                            }`}
+                          />
                         ))}
 
                         {/* Auftrags-Balken */}
@@ -471,10 +594,15 @@ export function InteractiveGanttPlanningBoard({
                             leftPercent = (offsetMinutes / TOTAL_DAY_MINUTES) * 100;
                             widthPercent = (task.durationMinutes / TOTAL_DAY_MINUTES) * 100;
                           } else {
-                            const dayIndex = task.dayOfWeek ?? 0;
-                            const daysSpan = task.durationDays ?? 1;
-                            leftPercent = (dayIndex / WEEK_DAYS.length) * 100;
-                            widthPercent = (daysSpan / WEEK_DAYS.length) * 100;
+                            // Wochen- oder Monatsansicht
+                            const colIdx = timelineColumns.findIndex(
+                              (c) => c.dateIso === task.executionDate
+                            );
+                            if (colIdx >= 0) {
+                              leftPercent = (colIdx / timelineColumns.length) * 100;
+                              const days = task.durationDays || 1;
+                              widthPercent = (days / timelineColumns.length) * 100;
+                            }
                           }
 
                           widthPercent = Math.min(widthPercent, 100 - leftPercent);
@@ -527,14 +655,14 @@ export function InteractiveGanttPlanningBoard({
                                 <span className="shrink-0 font-bold bg-black/40 px-1 py-0.5 rounded">
                                   {viewScope === "day"
                                     ? `${formatMinutesToTime(task.startMinutes)} (${task.durationMinutes}m)`
-                                    : `${task.durationDays || 1}d`}
+                                    : task.executionDate.slice(5)}
                                 </span>
                               </div>
 
-                              {/* 15-Minuten Resize Handle */}
+                              {/* Resize Handle */}
                               <div
                                 onMouseDown={(e) => handleResizeMouseDown(e, task)}
-                                title="Ziehen zur 15-Minuten Feinjustierung"
+                                title="Ziehen zum Verlängern/Verkürzen der Dauer"
                                 className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/40 active:bg-blue-400 transition-colors z-20 flex items-center justify-center"
                               >
                                 <div className="h-4 w-0.5 bg-neutral-400/60 rounded" />
@@ -569,7 +697,7 @@ export function InteractiveGanttPlanningBoard({
                 </Badge>
               </CardTitle>
               <CardDescription className="text-xs text-neutral-400">
-                Klicke auf eine Karte für die Detailsicht oder ziehe sie nach oben auf die Zeitleiste (15-Min Raster).
+                Klicke auf eine Karte für die Detailsicht oder ziehe sie nach oben in das Raster.
               </CardDescription>
             </div>
           </div>
@@ -605,7 +733,7 @@ export function InteractiveGanttPlanningBoard({
                         variant={isEmergency ? "destructive" : "secondary"}
                         className="text-[9px] py-0 px-1"
                       >
-                        {isEmergency ? "Notfall" : `${task.durationMinutes}m Aufwand`}
+                        {isEmergency ? "Notfall" : `${task.durationMinutes}m`}
                       </Badge>
                     </div>
 
@@ -615,7 +743,7 @@ export function InteractiveGanttPlanningBoard({
 
                     <div className="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-neutral-800/60 pointer-events-none">
                       <span className="truncate max-w-[130px]">{task.equipmentName}</span>
-                      <span className="text-blue-400 font-medium">Details / Ziehen →</span>
+                      <span className="text-blue-400 font-medium font-mono">{task.executionDate}</span>
                     </div>
                   </div>
                 );
@@ -625,7 +753,7 @@ export function InteractiveGanttPlanningBoard({
         </CardContent>
       </Card>
 
-      {/* POPUP / MODAL: DETAILANSICHT DER INSTANDHALTUNGS-MASSNAHME */}
+      {/* POPUP / MODAL: DETAILANSICHT MIT ECHTEM DATUMS-PICKER */}
       {selectedTaskForDetails && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-2xl rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl overflow-hidden flex flex-col">
@@ -662,7 +790,6 @@ export function InteractiveGanttPlanningBoard({
 
             {/* Modal Content */}
             <div className="p-6 space-y-5 text-xs text-neutral-300 overflow-y-auto max-h-[70vh]">
-              {/* Material-Warnung im Detail */}
               {selectedTaskForDetails.hasStockConflict && (
                 <div className="p-3 rounded-lg border border-amber-800/80 bg-amber-950/40 text-amber-200 flex items-start gap-2.5">
                   <PackageX className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
@@ -739,14 +866,37 @@ export function InteractiveGanttPlanningBoard({
                 </div>
               </div>
 
-              {/* Exakte Zeitplanung: Startzeit, Endzeit & Dauer */}
+              {/* DATUM- & ZEITPLANUNG: AUSFÜHRUNGSDATUM, START, ENDE, DAUER */}
               <div className="bg-neutral-950 p-4 rounded-lg border border-neutral-800 space-y-3">
                 <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-                  <Clock className="h-4 w-4 text-blue-400" />
-                  Genaue Zeiteinteilung (Start, Ende, Dauer)
+                  <Calendar className="h-4 w-4 text-blue-400" />
+                  Terminierung & Ausführungszeitpunkt
                 </span>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  {/* Ausführungsdatum Date-Picker */}
+                  <div>
+                    <label className="text-[11px] font-medium text-neutral-400 block mb-1">
+                      Ausführungsdatum:
+                    </label>
+                    <input
+                      type="date"
+                      value={selectedTaskForDetails.executionDate}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        const updated = {
+                          ...selectedTaskForDetails,
+                          executionDate: val,
+                        };
+                        setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                        setSelectedTaskForDetails(updated);
+                        if (onTaskUpdate) onTaskUpdate(updated);
+                      }}
+                      className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
                   {/* Startzeit Time-Picker */}
                   <div>
                     <label className="text-[11px] font-medium text-neutral-400 block mb-1">
@@ -803,7 +953,7 @@ export function InteractiveGanttPlanningBoard({
                   {/* Dauer in Minuten */}
                   <div>
                     <label className="text-[11px] font-medium text-neutral-400 block mb-1">
-                      Dauer (in Minuten):
+                      Dauer (Minuten):
                     </label>
                     <div className="flex items-center gap-1.5">
                       <input
@@ -829,10 +979,10 @@ export function InteractiveGanttPlanningBoard({
                   </div>
                 </div>
 
-                {/* Schnellauswahl-Buttons */}
+                {/* Presets */}
                 <div className="pt-2 flex flex-wrap items-center gap-1.5 border-t border-neutral-800/80">
                   <span className="text-[10px] text-neutral-500 uppercase font-semibold mr-1">
-                    Presets:
+                    Schnellwahl:
                   </span>
                   {[15, 30, 45, 60, 90, 120, 180, 240].map((mins) => (
                     <button
@@ -858,7 +1008,7 @@ export function InteractiveGanttPlanningBoard({
                 </div>
               </div>
 
-              {/* Beschreibung & Problemstellung */}
+              {/* Beschreibung */}
               <div>
                 <label className="text-xs font-semibold text-neutral-400 block mb-1">
                   Arbeitsanweisung & Symptombeschreibung:
@@ -867,43 +1017,12 @@ export function InteractiveGanttPlanningBoard({
                   {selectedTaskForDetails.description}
                 </div>
               </div>
-
-              {/* Schnellauswahl: Zeit feinanpassen (15-Minuten-Takt) */}
-              <div className="border-t border-neutral-800 pt-4 flex flex-wrap items-center justify-between gap-3">
-                <span className="text-xs font-medium text-neutral-400">
-                  Dauer direkt anpassen:
-                </span>
-                <div className="flex items-center gap-1.5">
-                  {[15, 30, 45, 60, 90, 120, 180].map((mins) => (
-                    <button
-                      key={mins}
-                      onClick={() => {
-                        const updated = {
-                          ...selectedTaskForDetails,
-                          durationMinutes: mins,
-                        };
-                        setTasks((prev) =>
-                          prev.map((t) => (t.id === updated.id ? updated : t))
-                        );
-                        setSelectedTaskForDetails(updated);
-                      }}
-                      className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors ${
-                        selectedTaskForDetails.durationMinutes === mins
-                          ? "bg-blue-600 border-blue-500 text-white font-bold"
-                          : "border-neutral-800 bg-neutral-950 text-neutral-400 hover:text-white"
-                      }`}
-                    >
-                      {mins}m
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
 
             {/* Modal Footer */}
             <div className="flex items-center justify-between p-4 border-t border-neutral-800 bg-neutral-950">
               <span className="text-[11px] text-neutral-500 font-mono">
-                ID: {selectedTaskForDetails.id}
+                Datum: {selectedTaskForDetails.executionDate} • Start: {formatMinutesToTime(selectedTaskForDetails.startMinutes)} Uhr
               </span>
               <Button
                 onClick={() => setSelectedTaskForDetails(null)}
