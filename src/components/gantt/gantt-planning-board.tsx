@@ -118,6 +118,7 @@ export function InteractiveGanttPlanningBoard({
 
   // Dragging & Resizing States
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [dragOffsetMinutes, setDragOffsetMinutes] = useState<number>(0);
   const [resizingTask, setResizingTask] = useState<{
     id: string;
     initialX: number;
@@ -151,18 +152,27 @@ export function InteractiveGanttPlanningBoard({
   }, [resources, groupBy]);
 
   // Drag & Drop
-  const handleDragStart = (e: React.DragEvent, taskId: string) => {
+  const handleDragStart = (e: React.DragEvent, task: GanttOrderTask) => {
     if (resizingTask) {
       e.preventDefault();
       return;
     }
-    e.dataTransfer.setData("text/plain", taskId);
+    e.dataTransfer.setData("text/plain", task.id);
     e.dataTransfer.effectAllowed = "move";
-    setDraggingTaskId(taskId);
+    setDraggingTaskId(task.id);
+
+    // Berechne den Offset innerhalb des gegriffenen Balkens
+    const cardRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const clickXInCard = e.clientX - cardRect.left;
+    const cardWidth = cardRect.width || 1;
+    const clickRatio = Math.max(0, Math.min(1, clickXInCard / cardWidth));
+    const offsetMin = Math.round((clickRatio * task.durationMinutes) / STEP_MINUTES) * STEP_MINUTES;
+    setDragOffsetMinutes(offsetMin);
   };
 
   const handleDragEnd = () => {
     setDraggingTaskId(null);
+    setDragOffsetMinutes(0);
   };
 
   // 15-Minuten Drop-Berechnung
@@ -181,9 +191,12 @@ export function InteractiveGanttPlanningBoard({
           let updated: GanttOrderTask;
 
           if (viewScope === "day") {
-            // Berechne Minuten im 15-Minuten-Raster
-            const exactMinute = START_OF_DAY_MINUTES + clickPercent * TOTAL_DAY_MINUTES;
-            const snappedMinute = Math.round(exactMinute / STEP_MINUTES) * STEP_MINUTES;
+            // Berechne genaue Minute der Mausposition
+            const mouseMinute = START_OF_DAY_MINUTES + clickPercent * TOTAL_DAY_MINUTES;
+            // Berücksichtige den Klick-Offset innerhalb des gezogenen Balkens
+            const desiredStart = mouseMinute - dragOffsetMinutes;
+            // Snapping: Exakt auf das nächste 15-Minuten-Intervall einrasten!
+            const snappedMinute = Math.round(desiredStart / STEP_MINUTES) * STEP_MINUTES;
             const maxStart = END_OF_DAY_MINUTES - t.durationMinutes;
             const safeStart = Math.max(START_OF_DAY_MINUTES, Math.min(maxStart, snappedMinute));
 
@@ -210,6 +223,7 @@ export function InteractiveGanttPlanningBoard({
       })
     );
     setDraggingTaskId(null);
+    setDragOffsetMinutes(0);
   };
 
   const handleDropOnInbox = (e: React.DragEvent) => {
@@ -470,7 +484,7 @@ export function InteractiveGanttPlanningBoard({
                             <div
                               key={task.id}
                               draggable={!resizingTask}
-                              onDragStart={(e) => handleDragStart(e, task.id)}
+                              onDragStart={(e) => handleDragStart(e, task)}
                               onDragEnd={handleDragEnd}
                               onClick={() => setSelectedTaskForDetails(task)}
                               style={{
@@ -574,7 +588,7 @@ export function InteractiveGanttPlanningBoard({
                   <div
                     key={task.id}
                     draggable={!resizingTask}
-                    onDragStart={(e) => handleDragStart(e, task.id)}
+                    onDragStart={(e) => handleDragStart(e, task)}
                     onDragEnd={handleDragEnd}
                     onClick={() => setSelectedTaskForDetails(task)}
                     className={`p-3 rounded-lg border shadow cursor-pointer hover:border-blue-400 transition-all ${
