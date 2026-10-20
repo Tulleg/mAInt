@@ -62,11 +62,11 @@ interface InteractiveGanttProps {
 }
 
 const START_OF_DAY_MINUTES = 6 * 60; // 06:00 = 360 Min
-const END_OF_DAY_MINUTES = 20 * 60; // 20:00 = 1200 Min
-const TOTAL_DAY_MINUTES = END_OF_DAY_MINUTES - START_OF_DAY_MINUTES; // 840 Min = 14 Std
-const STEP_MINUTES = 15; // 15-Minuten Rasterung
+const END_OF_DAY_MINUTES = 21 * 60; // 21:00 = 1260 Min (damit der Slot 20:00 bis 21:00 eine volle Stunde umfasst!)
+const TOTAL_DAY_MINUTES = END_OF_DAY_MINUTES - START_OF_DAY_MINUTES; // 900 Min = genau 15 Stunden
 
-const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+const STEP_MINUTES = 15; // 15-Minuten Rasterung
+const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]; // 15 Spalten (6-7, 7-8, ..., 20-21)
 const WEEK_DAYS = [
   { dayIndex: 0, label: "Montag", date: "20. Okt" },
   { dayIndex: 1, label: "Dienstag", date: "21. Okt" },
