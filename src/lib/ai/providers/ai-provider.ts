@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import { db } from "../db";
-import { tenants } from "../db/schema";
+import { db } from "../../db";
+import { tenants } from "../../db/schema";
 
 export interface LlmChatMessage {
   role: "system" | "user" | "assistant";

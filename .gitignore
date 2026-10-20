@@ -37,3 +37,6 @@ next-env.d.ts
 
 # Dexie & IndexedDB local test dumps
 *.dexie
+
+# Local project node binaries
+.tools/
