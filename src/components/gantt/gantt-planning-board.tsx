@@ -690,19 +690,157 @@ export function InteractiveGanttPlanningBoard({
                   <span className="text-neutral-500 block text-[10px] uppercase font-bold">
                     Zuständiger Monteur
                   </span>
-                  <span className="font-semibold text-white block mt-0.5">
-                    {selectedTaskForDetails.technicianName || "❌ Ungeplant im Auftragseingang"}
-                  </span>
+                  <select
+                    value={selectedTaskForDetails.technicianId || "UNASSIGNED"}
+                    onChange={(e) => {
+                      const newTechId = e.target.value === "UNASSIGNED" ? null : e.target.value;
+                      const tech = resources.find((r) => r.id === newTechId);
+                      const updated = {
+                        ...selectedTaskForDetails,
+                        technicianId: newTechId,
+                        technicianName: tech ? tech.name : null,
+                      };
+                      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                      setSelectedTaskForDetails(updated);
+                      if (onTaskUpdate) onTaskUpdate(updated);
+                    }}
+                    className="w-full mt-1 rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="UNASSIGNED">❌ Nicht zugeordnet (Auftragseingang)</option>
+                    {resources.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        👤 {r.name} ({r.qualification})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
                   <span className="text-neutral-500 block text-[10px] uppercase font-bold">
-                    Geplanter Start & Dauer
+                    Priorität
                   </span>
-                  <span className="font-semibold text-white block mt-0.5 font-mono">
-                    {formatMinutesToTime(selectedTaskForDetails.startMinutes)} Uhr (
-                    {selectedTaskForDetails.durationMinutes} Minuten)
+                  <span className="font-semibold text-white block mt-1 font-mono">
+                    {selectedTaskForDetails.priority}
                   </span>
+                </div>
+              </div>
+
+              {/* Exakte Zeitplanung: Startzeit, Endzeit & Dauer */}
+              <div className="bg-neutral-950 p-4 rounded-lg border border-neutral-800 space-y-3">
+                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  <Clock className="h-4 w-4 text-blue-400" />
+                  Genaue Zeiteinteilung (Start, Ende, Dauer)
+                </span>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {/* Startzeit Time-Picker */}
+                  <div>
+                    <label className="text-[11px] font-medium text-neutral-400 block mb-1">
+                      Startzeit (hh:mm):
+                    </label>
+                    <input
+                      type="time"
+                      value={formatMinutesToTime(selectedTaskForDetails.startMinutes)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        const [hoursStr, minsStr] = val.split(":");
+                        const totalMins = parseInt(hoursStr) * 60 + parseInt(minsStr);
+                        const updated = {
+                          ...selectedTaskForDetails,
+                          startMinutes: totalMins,
+                        };
+                        setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                        setSelectedTaskForDetails(updated);
+                        if (onTaskUpdate) onTaskUpdate(updated);
+                      }}
+                      className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* Endzeit Time-Picker */}
+                  <div>
+                    <label className="text-[11px] font-medium text-neutral-400 block mb-1">
+                      Endzeit (hh:mm):
+                    </label>
+                    <input
+                      type="time"
+                      value={formatMinutesToTime(
+                        selectedTaskForDetails.startMinutes + selectedTaskForDetails.durationMinutes
+                      )}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        const [hoursStr, minsStr] = val.split(":");
+                        const endMins = parseInt(hoursStr) * 60 + parseInt(minsStr);
+                        const newDuration = Math.max(15, endMins - selectedTaskForDetails.startMinutes);
+                        const updated = {
+                          ...selectedTaskForDetails,
+                          durationMinutes: newDuration,
+                        };
+                        setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                        setSelectedTaskForDetails(updated);
+                        if (onTaskUpdate) onTaskUpdate(updated);
+                      }}
+                      className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* Dauer in Minuten */}
+                  <div>
+                    <label className="text-[11px] font-medium text-neutral-400 block mb-1">
+                      Dauer (in Minuten):
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        step={15}
+                        min={15}
+                        max={480}
+                        value={selectedTaskForDetails.durationMinutes}
+                        onChange={(e) => {
+                          const mins = Math.max(15, parseInt(e.target.value) || 15);
+                          const updated = {
+                            ...selectedTaskForDetails,
+                            durationMinutes: mins,
+                          };
+                          setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                          setSelectedTaskForDetails(updated);
+                          if (onTaskUpdate) onTaskUpdate(updated);
+                        }}
+                        className="w-full rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <span className="text-[11px] text-neutral-400 font-mono">min</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Schnellauswahl-Buttons */}
+                <div className="pt-2 flex flex-wrap items-center gap-1.5 border-t border-neutral-800/80">
+                  <span className="text-[10px] text-neutral-500 uppercase font-semibold mr-1">
+                    Presets:
+                  </span>
+                  {[15, 30, 45, 60, 90, 120, 180, 240].map((mins) => (
+                    <button
+                      key={mins}
+                      onClick={() => {
+                        const updated = {
+                          ...selectedTaskForDetails,
+                          durationMinutes: mins,
+                        };
+                        setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+                        setSelectedTaskForDetails(updated);
+                        if (onTaskUpdate) onTaskUpdate(updated);
+                      }}
+                      className={`px-2 py-0.5 rounded border text-[10px] font-mono transition-colors ${
+                        selectedTaskForDetails.durationMinutes === mins
+                          ? "bg-blue-600 border-blue-500 text-white font-bold"
+                          : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white"
+                      }`}
+                    >
+                      {mins}m
+                    </button>
+                  ))}
                 </div>
               </div>
 
