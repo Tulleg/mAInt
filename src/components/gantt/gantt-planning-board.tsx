@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,27 +15,38 @@ import {
   PackageX,
   Inbox,
   Clock,
-  Plus,
+  ExternalLink,
+  X,
+  FileCheck,
+  CheckCircle2,
+  Calendar,
   Layers,
-  Sparkles,
+  MapPin,
+  Tag,
+  ShieldAlert,
 } from "lucide-react";
 
 export interface GanttOrderTask {
   id: string;
   orderNumber: string;
   title: string;
+  description?: string;
   priority: "1_EMERGENCY" | "2_HIGH" | "3_MEDIUM" | "4_LOW";
   equipmentId: string;
+  equipmentNumber?: string;
   equipmentName: string;
-  technicianId?: string | null; // NULL bedeutet: Im Auftragseingang (ungeplant)
+  functionalLocationCode?: string;
+  technicianId?: string | null;
   technicianName?: string | null;
   qualificationRequired?: string;
-  startHour: number; // Für Tagesansicht: 6 bis 20
-  durationHours: number;
-  dayOfWeek?: number; // Für Wochenansicht: 0 = Mo bis 5 = Sa
-  durationDays?: number; // Tage in Wochenansicht
+  startMinutes: number; // 360 (06:00) bis 1200 (20:00)
+  durationMinutes: number; // Mindestens 15 Minuten
+  dayOfWeek?: number; // 0 = Mo bis 5 = Sa
+  durationDays?: number;
   hasStockConflict?: boolean;
   missingPartName?: string;
+  sapOrderNr?: string;
+  damageCode?: string;
 }
 
 export interface ResourceGroup {
@@ -50,6 +61,11 @@ interface InteractiveGanttProps {
   onTaskUpdate?: (task: GanttOrderTask) => void;
 }
 
+const START_OF_DAY_MINUTES = 6 * 60; // 06:00 = 360 Min
+const END_OF_DAY_MINUTES = 20 * 60; // 20:00 = 1200 Min
+const TOTAL_DAY_MINUTES = END_OF_DAY_MINUTES - START_OF_DAY_MINUTES; // 840 Min = 14 Std
+const STEP_MINUTES = 15; // 15-Minuten Rasterung
+
 const HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 const WEEK_DAYS = [
   { dayIndex: 0, label: "Montag", date: "20. Okt" },
@@ -60,22 +76,33 @@ const WEEK_DAYS = [
   { dayIndex: 5, label: "Samstag", date: "25. Okt" },
 ];
 
+function formatMinutesToTime(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
+}
+
 export function InteractiveGanttPlanningBoard({
   resources,
   initialTasks,
   onTaskUpdate,
 }: InteractiveGanttProps) {
-  // Demo: Ein Teil der Aufträge ist zugewiesen, ein Teil liegt im ungeplanten "Auftragseingang"
   const [tasks, setTasks] = useState<GanttOrderTask[]>(() => {
     return initialTasks.map((t, idx) => {
-      // Mindestens 2 Aufträge in den unzugewiesenen Eingang legen
       const isUnplanned = idx >= 3;
+      // Konvertiere ggf. alte Stunden in Minuten
+      const startMin = (t as any).startHour ? (t as any).startHour * 60 : t.startMinutes || (7 * 60 + (idx % 4) * 45);
+      const durMin = (t as any).durationHours ? (t as any).durationHours * 60 : t.durationMinutes || 90;
+
       return {
         ...t,
+        description: t.description || "Reguläre Instandhaltungsmaßnahme gemäß Prüfvorschrift.",
+        equipmentNumber: t.equipmentNumber || "EQ-10042",
+        functionalLocationCode: t.functionalLocationCode || "W1-HALLE2-LINIE4",
         technicianId: isUnplanned ? null : t.technicianId || resources[idx % resources.length]?.id,
-        technicianName: isUnplanned
-          ? null
-          : t.technicianName || resources[idx % resources.length]?.name,
+        technicianName: isUnplanned ? null : t.technicianName || resources[idx % resources.length]?.name,
+        startMinutes: startMin,
+        durationMinutes: durMin,
         dayOfWeek: t.dayOfWeek ?? (idx % 5),
         durationDays: t.durationDays ?? 1,
       };
@@ -86,6 +113,9 @@ export function InteractiveGanttPlanningBoard({
   const [groupBy, setGroupBy] = useState<"technician" | "qualification">("technician");
   const [currentWeekOffset, setCurrentWeekOffset] = useState<number>(0);
 
+  // Detail Modal / Popup State
+  const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<GanttOrderTask | null>(null);
+
   // Dragging & Resizing States
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [resizingTask, setResizingTask] = useState<{
@@ -94,12 +124,8 @@ export function InteractiveGanttPlanningBoard({
     initialVal: number;
   } | null>(null);
 
-  // Ungeplante Aufträge im Eingang
-  const unplannedTasks = useMemo(() => {
-    return tasks.filter((t) => !t.technicianId);
-  }, [tasks]);
+  const unplannedTasks = useMemo(() => tasks.filter((t) => !t.technicianId), [tasks]);
 
-  // Ressourcen-Gruppierung
   const groupedResources = useMemo(() => {
     if (groupBy === "qualification") {
       const qualMap = new Map<string, ResourceGroup[]>();
@@ -124,9 +150,8 @@ export function InteractiveGanttPlanningBoard({
     ];
   }, [resources, groupBy]);
 
-  // HTML5 Drag & Drop
+  // Drag & Drop
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
-    // Wenn gerade ein Resize aktiv ist, DnD blockieren
     if (resizingTask) {
       e.preventDefault();
       return;
@@ -140,31 +165,44 @@ export function InteractiveGanttPlanningBoard({
     setDraggingTaskId(null);
   };
 
-  // Drop in eine Zeile/Zeitslot des Gantt-Charts
-  const handleDropOnGanttRow = (techId: string, slotIndex: number) => {
+  // 15-Minuten Drop-Berechnung
+  const handleDropOnGanttRow = (techId: string, e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
     if (!draggingTaskId) return;
+
+    const rowRect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rowRect.left;
+    const clickPercent = Math.max(0, Math.min(1, clickX / rowRect.width));
 
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === draggingTaskId) {
           const tech = resources.find((r) => r.id === techId);
           let updated: GanttOrderTask;
+
           if (viewScope === "day") {
-            const newStartHour = HOURS[slotIndex] ?? 7;
+            // Berechne Minuten im 15-Minuten-Raster
+            const exactMinute = START_OF_DAY_MINUTES + clickPercent * TOTAL_DAY_MINUTES;
+            const snappedMinute = Math.round(exactMinute / STEP_MINUTES) * STEP_MINUTES;
+            const maxStart = END_OF_DAY_MINUTES - t.durationMinutes;
+            const safeStart = Math.max(START_OF_DAY_MINUTES, Math.min(maxStart, snappedMinute));
+
             updated = {
               ...t,
               technicianId: techId,
               technicianName: tech?.name || "Zugewiesen",
-              startHour: Math.max(6, Math.min(20 - t.durationHours, newStartHour)),
+              startMinutes: safeStart,
             };
           } else {
+            const dayIdx = Math.floor(clickPercent * WEEK_DAYS.length);
             updated = {
               ...t,
               technicianId: techId,
               technicianName: tech?.name || "Zugewiesen",
-              dayOfWeek: slotIndex,
+              dayOfWeek: Math.max(0, Math.min(5, dayIdx)),
             };
           }
+
           if (onTaskUpdate) onTaskUpdate(updated);
           return updated;
         }
@@ -174,7 +212,6 @@ export function InteractiveGanttPlanningBoard({
     setDraggingTaskId(null);
   };
 
-  // Drop zurück in den Auftragseingang (Disponierung aufheben)
   const handleDropOnInbox = (e: React.DragEvent) => {
     e.preventDefault();
     if (!draggingTaskId) return;
@@ -196,32 +233,34 @@ export function InteractiveGanttPlanningBoard({
     setDraggingTaskId(null);
   };
 
-  // Maus-Resize Handhabung (Absolut entkoppelt vom DnD)
+  // 15-Minuten Resize Handhabung
   const handleResizeMouseDown = (e: React.MouseEvent, task: GanttOrderTask) => {
     e.preventDefault();
     e.stopPropagation();
     setResizingTask({
       id: task.id,
       initialX: e.clientX,
-      initialVal: viewScope === "day" ? task.durationHours : task.durationDays || 1,
+      initialVal: viewScope === "day" ? task.durationMinutes : task.durationDays || 1,
     });
   };
 
   const handleGlobalMouseMove = (e: React.MouseEvent) => {
     if (!resizingTask) return;
     const diff = e.clientX - resizingTask.initialX;
-    const stepSizePx = viewScope === "day" ? 50 : 120; // Pixel pro Einheit
-    const deltaUnits = Math.round(diff / stepSizePx);
 
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === resizingTask.id) {
           if (viewScope === "day") {
-            const newVal = Math.max(1, Math.min(8, resizingTask.initialVal + deltaUnits));
-            return { ...t, durationHours: newVal };
+            // ~15px = 15 Minuten Schrittweite
+            const deltaSteps = Math.round(diff / 15);
+            const deltaMinutes = deltaSteps * STEP_MINUTES;
+            const newMinutes = Math.max(15, Math.min(480, resizingTask.initialVal + deltaMinutes));
+            return { ...t, durationMinutes: newMinutes };
           } else {
-            const newVal = Math.max(1, Math.min(5, resizingTask.initialVal + deltaUnits));
-            return { ...t, durationDays: newVal };
+            const deltaDays = Math.round(diff / 100);
+            const newDays = Math.max(1, Math.min(5, resizingTask.initialVal + deltaDays));
+            return { ...t, durationDays: newDays };
           }
         }
         return t;
@@ -230,12 +269,8 @@ export function InteractiveGanttPlanningBoard({
   };
 
   const handleGlobalMouseUp = () => {
-    if (resizingTask) {
-      setResizingTask(null);
-    }
+    if (resizingTask) setResizingTask(null);
   };
-
-  const currentColumnsCount = viewScope === "day" ? HOURS.length : WEEK_DAYS.length;
 
   return (
     <div
@@ -257,7 +292,7 @@ export function InteractiveGanttPlanningBoard({
                   : "text-neutral-400 hover:text-white"
               }`}
             >
-              Tagesansicht
+              Tagesansicht (15-Min Raster)
             </button>
             <button
               type="button"
@@ -323,7 +358,6 @@ export function InteractiveGanttPlanningBoard({
         <div className="flex flex-col w-full">
           {/* Kopfzeile (Links: Ressourcen, Rechts: Zeitachse) */}
           <div className="flex border-b border-neutral-800 bg-neutral-900/90 text-xs font-semibold text-neutral-400">
-            {/* Ressourcen Header */}
             <div className="w-72 shrink-0 p-3 border-r border-neutral-800 flex items-center gap-2 uppercase tracking-wider text-[11px]">
               <User className="h-3.5 w-3.5 text-blue-400" />
               Ressource & Qualifikation
@@ -365,9 +399,9 @@ export function InteractiveGanttPlanningBoard({
 
                 {group.members.map((res) => {
                   const techTasks = tasks.filter((t) => t.technicianId === res.id);
-                  const totalHours = techTasks.reduce((acc, curr) => acc + curr.durationHours, 0);
+                  const totalMinutes = techTasks.reduce((acc, curr) => acc + curr.durationMinutes, 0);
                   const isOverbooked =
-                    viewScope === "day" ? totalHours > 8 : techTasks.length > 4;
+                    viewScope === "day" ? totalMinutes > 8 * 60 : techTasks.length > 4;
 
                   return (
                     <div
@@ -397,21 +431,20 @@ export function InteractiveGanttPlanningBoard({
 
                         <div className="text-[10px] text-neutral-500 font-mono">
                           {viewScope === "day"
-                            ? `Geplant: ${totalHours}h / 8h`
+                            ? `Geplant: ${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m / 8h`
                             : `${techTasks.length} Aufträge eingeplant`}
                         </div>
                       </div>
 
-                      {/* Rechte Spalte: Zeitraster */}
-                      <div className="flex-1 relative flex divide-x divide-neutral-900 bg-neutral-950">
-                        {/* Drop-Zonen */}
-                        {Array.from({ length: currentColumnsCount }).map((_, slotIdx) => (
-                          <div
-                            key={slotIdx}
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={() => handleDropOnGanttRow(res.id, slotIdx)}
-                            className="flex-1 h-full hover:bg-blue-950/20 transition-colors"
-                          />
+                      {/* Rechte Spalte: Zeitraster mit Drop-Zone */}
+                      <div
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => handleDropOnGanttRow(res.id, e)}
+                        className="flex-1 relative flex divide-x divide-neutral-900 bg-neutral-950"
+                      >
+                        {/* 1-Stunden Hintergrundlinien */}
+                        {HOURS.map((_, i) => (
+                          <div key={i} className="flex-1 h-full pointer-events-none" />
                         ))}
 
                         {/* Auftrags-Balken */}
@@ -420,9 +453,9 @@ export function InteractiveGanttPlanningBoard({
                           let widthPercent = 0;
 
                           if (viewScope === "day") {
-                            const startOffset = Math.max(0, task.startHour - 6);
-                            leftPercent = (startOffset / HOURS.length) * 100;
-                            widthPercent = (task.durationHours / HOURS.length) * 100;
+                            const offsetMinutes = Math.max(0, task.startMinutes - START_OF_DAY_MINUTES);
+                            leftPercent = (offsetMinutes / TOTAL_DAY_MINUTES) * 100;
+                            widthPercent = (task.durationMinutes / TOTAL_DAY_MINUTES) * 100;
                           } else {
                             const dayIndex = task.dayOfWeek ?? 0;
                             const daysSpan = task.durationDays ?? 1;
@@ -439,13 +472,14 @@ export function InteractiveGanttPlanningBoard({
                               draggable={!resizingTask}
                               onDragStart={(e) => handleDragStart(e, task.id)}
                               onDragEnd={handleDragEnd}
+                              onClick={() => setSelectedTaskForDetails(task)}
                               style={{
                                 left: `${leftPercent}%`,
                                 width: `calc(${widthPercent}% - 4px)`,
                                 top: "8px",
                                 bottom: "8px",
                               }}
-                              className={`absolute rounded-lg border p-2 shadow-lg cursor-grab active:cursor-grabbing transition-shadow flex flex-col justify-between overflow-hidden z-10 ${
+                              className={`absolute rounded-lg border p-2 shadow-lg cursor-grab active:cursor-grabbing hover:ring-2 hover:ring-blue-400 transition-all flex flex-col justify-between overflow-hidden z-10 ${
                                 isEmergency
                                   ? "bg-red-950/90 border-red-600 text-white"
                                   : task.hasStockConflict
@@ -457,33 +491,36 @@ export function InteractiveGanttPlanningBoard({
                                 <span className="font-mono font-bold text-[10px] truncate">
                                   {task.orderNumber}
                                 </span>
-                                {task.hasStockConflict && (
-                                  <span
-                                    title={`Materialengpass: ${task.missingPartName}`}
-                                    className="text-amber-400 shrink-0"
-                                  >
-                                    <PackageX className="h-3 w-3" />
-                                  </span>
-                                )}
+                                <div className="flex items-center gap-1">
+                                  {task.hasStockConflict && (
+                                    <span
+                                      title={`Materialengpass: ${task.missingPartName}`}
+                                      className="text-amber-400 shrink-0"
+                                    >
+                                      <PackageX className="h-3 w-3" />
+                                    </span>
+                                  )}
+                                  <ExternalLink className="h-3 w-3 text-neutral-400 hover:text-white" />
+                                </div>
                               </div>
 
                               <span className="text-[11px] font-semibold truncate leading-tight pointer-events-none">
                                 {task.title}
                               </span>
 
-                              <div className="flex items-center justify-between text-[9px] text-neutral-400 font-mono pointer-events-none">
-                                <span className="truncate max-w-[120px]">{task.equipmentName}</span>
-                                <span className="shrink-0 font-bold text-neutral-300">
+                              <div className="flex items-center justify-between text-[9px] text-neutral-300 font-mono pointer-events-none">
+                                <span className="truncate max-w-[110px]">{task.equipmentName}</span>
+                                <span className="shrink-0 font-bold bg-black/40 px-1 py-0.5 rounded">
                                   {viewScope === "day"
-                                    ? `${task.durationHours}h`
+                                    ? `${formatMinutesToTime(task.startMinutes)} (${task.durationMinutes}m)`
                                     : `${task.durationDays || 1}d`}
                                 </span>
                               </div>
 
-                              {/* Entkoppeltes Resize Handle */}
+                              {/* 15-Minuten Resize Handle */}
                               <div
                                 onMouseDown={(e) => handleResizeMouseDown(e, task)}
-                                title="Ziehen zum Verlängern/Verkürzen der Dauer"
+                                title="Ziehen zur 15-Minuten Feinjustierung"
                                 className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-white/40 active:bg-blue-400 transition-colors z-20 flex items-center justify-center"
                               >
                                 <div className="h-4 w-0.5 bg-neutral-400/60 rounded" />
@@ -501,7 +538,7 @@ export function InteractiveGanttPlanningBoard({
         </div>
       </Card>
 
-      {/* UNTERER BEREICH: AUFTRAGSEINGANG / UNGEPLANTE MASSNAHMEN (DISPO-POOL) */}
+      {/* DISPO-POOL: AUFTRAGSEINGANG */}
       <Card
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDropOnInbox}
@@ -518,7 +555,7 @@ export function InteractiveGanttPlanningBoard({
                 </Badge>
               </CardTitle>
               <CardDescription className="text-xs text-neutral-400">
-                Ziehe Aufträge per Drag-&-Drop nach oben in den Kalender, um sie einem Monteur zuzuweisen. (Oder ziehe geplante Aufträge hierher zurück, um die Zuweisung aufzuheben).
+                Klicke auf eine Karte für die Detailsicht oder ziehe sie nach oben auf die Zeitleiste (15-Min Raster).
               </CardDescription>
             </div>
           </div>
@@ -536,10 +573,11 @@ export function InteractiveGanttPlanningBoard({
                 return (
                   <div
                     key={task.id}
-                    draggable
+                    draggable={!resizingTask}
                     onDragStart={(e) => handleDragStart(e, task.id)}
                     onDragEnd={handleDragEnd}
-                    className={`p-3 rounded-lg border shadow cursor-grab active:cursor-grabbing hover:border-neutral-500 transition-all ${
+                    onClick={() => setSelectedTaskForDetails(task)}
+                    className={`p-3 rounded-lg border shadow cursor-pointer hover:border-blue-400 transition-all ${
                       isEmergency
                         ? "bg-red-950/40 border-red-800/80 text-red-200"
                         : task.hasStockConflict
@@ -547,23 +585,23 @@ export function InteractiveGanttPlanningBoard({
                         : "bg-neutral-950 border-neutral-800 text-neutral-200"
                     }`}
                   >
-                    <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                    <div className="flex items-center justify-between text-[10px] font-mono mb-1 pointer-events-none">
                       <span className="font-bold text-white">{task.orderNumber}</span>
                       <Badge
                         variant={isEmergency ? "destructive" : "secondary"}
                         className="text-[9px] py-0 px-1"
                       >
-                        {isEmergency ? "Notfall" : `${task.durationHours}h Aufwand`}
+                        {isEmergency ? "Notfall" : `${task.durationMinutes}m Aufwand`}
                       </Badge>
                     </div>
 
-                    <h4 className="text-xs font-semibold truncate text-white mb-1">
+                    <h4 className="text-xs font-semibold truncate text-white mb-1 pointer-events-none">
                       {task.title}
                     </h4>
 
-                    <div className="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-neutral-800/60">
-                      <span className="truncate max-w-[140px]">{task.equipmentName}</span>
-                      <span className="text-blue-400 font-medium">Ziehen →</span>
+                    <div className="flex items-center justify-between text-[10px] text-neutral-400 pt-1 border-t border-neutral-800/60 pointer-events-none">
+                      <span className="truncate max-w-[130px]">{task.equipmentName}</span>
+                      <span className="text-blue-400 font-medium">Details / Ziehen →</span>
                     </div>
                   </div>
                 );
@@ -572,6 +610,159 @@ export function InteractiveGanttPlanningBoard({
           )}
         </CardContent>
       </Card>
+
+      {/* POPUP / MODAL: DETAILANSICHT DER INSTANDHALTUNGS-MASSNAHME */}
+      {selectedTaskForDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-neutral-800 bg-neutral-950">
+              <div className="flex items-center gap-2.5">
+                <Wrench className="h-5 w-5 text-blue-400" />
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    {selectedTaskForDetails.orderNumber}
+                    <Badge
+                      variant={
+                        selectedTaskForDetails.priority === "1_EMERGENCY"
+                          ? "destructive"
+                          : "default"
+                      }
+                      className="text-[10px]"
+                    >
+                      {selectedTaskForDetails.priority}
+                    </Badge>
+                  </h3>
+                  <span className="text-xs text-neutral-400">{selectedTaskForDetails.title}</span>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSelectedTaskForDetails(null)}
+                className="h-8 w-8 text-neutral-400 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-5 text-xs text-neutral-300 overflow-y-auto max-h-[70vh]">
+              {/* Material-Warnung im Detail */}
+              {selectedTaskForDetails.hasStockConflict && (
+                <div className="p-3 rounded-lg border border-amber-800/80 bg-amber-950/40 text-amber-200 flex items-start gap-2.5">
+                  <PackageX className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">SAP MM Materialengpass:</span>
+                    <span>
+                      Das für die Reparatur benötigte Ersatzteil (
+                      <strong>{selectedTaskForDetails.missingPartName}</strong>) weist keinen
+                      verfügbaren Lagerbestand auf. Bitte Beschaffung prüfen oder Termin verschieben.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Stammdaten Grid */}
+              <div className="grid grid-cols-2 gap-4 bg-neutral-950 p-4 rounded-lg border border-neutral-800">
+                <div>
+                  <span className="text-neutral-500 block text-[10px] uppercase font-bold">
+                    Equipment / Anlage
+                  </span>
+                  <span className="font-semibold text-white block mt-0.5">
+                    {selectedTaskForDetails.equipmentName}
+                  </span>
+                  <span className="text-[10px] text-neutral-400 font-mono">
+                    {selectedTaskForDetails.equipmentNumber}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-neutral-500 block text-[10px] uppercase font-bold">
+                    Technischer Platz (FLoc)
+                  </span>
+                  <span className="font-semibold text-white block mt-0.5">
+                    {selectedTaskForDetails.functionalLocationCode}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-neutral-500 block text-[10px] uppercase font-bold">
+                    Zuständiger Monteur
+                  </span>
+                  <span className="font-semibold text-white block mt-0.5">
+                    {selectedTaskForDetails.technicianName || "❌ Ungeplant im Auftragseingang"}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-neutral-500 block text-[10px] uppercase font-bold">
+                    Geplanter Start & Dauer
+                  </span>
+                  <span className="font-semibold text-white block mt-0.5 font-mono">
+                    {formatMinutesToTime(selectedTaskForDetails.startMinutes)} Uhr (
+                    {selectedTaskForDetails.durationMinutes} Minuten)
+                  </span>
+                </div>
+              </div>
+
+              {/* Beschreibung & Problemstellung */}
+              <div>
+                <label className="text-xs font-semibold text-neutral-400 block mb-1">
+                  Arbeitsanweisung & Symptombeschreibung:
+                </label>
+                <div className="bg-neutral-950 p-3 rounded border border-neutral-800 text-neutral-200 leading-relaxed font-sans">
+                  {selectedTaskForDetails.description}
+                </div>
+              </div>
+
+              {/* Schnellauswahl: Zeit feinanpassen (15-Minuten-Takt) */}
+              <div className="border-t border-neutral-800 pt-4 flex flex-wrap items-center justify-between gap-3">
+                <span className="text-xs font-medium text-neutral-400">
+                  Dauer direkt anpassen:
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {[15, 30, 45, 60, 90, 120, 180].map((mins) => (
+                    <button
+                      key={mins}
+                      onClick={() => {
+                        const updated = {
+                          ...selectedTaskForDetails,
+                          durationMinutes: mins,
+                        };
+                        setTasks((prev) =>
+                          prev.map((t) => (t.id === updated.id ? updated : t))
+                        );
+                        setSelectedTaskForDetails(updated);
+                      }}
+                      className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors ${
+                        selectedTaskForDetails.durationMinutes === mins
+                          ? "bg-blue-600 border-blue-500 text-white font-bold"
+                          : "border-neutral-800 bg-neutral-950 text-neutral-400 hover:text-white"
+                      }`}
+                    >
+                      {mins}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-neutral-800 bg-neutral-950">
+              <span className="text-[11px] text-neutral-500 font-mono">
+                ID: {selectedTaskForDetails.id}
+              </span>
+              <Button
+                onClick={() => setSelectedTaskForDetails(null)}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4"
+              >
+                Schließen
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
