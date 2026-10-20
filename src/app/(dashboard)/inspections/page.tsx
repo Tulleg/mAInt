@@ -15,24 +15,39 @@ export const metadata = {
 };
 
 export default async function InspectionsPage() {
-  let tenant = await db.query.tenants.findFirst();
+  let tenant = null;
+  let existingTemplate = null;
 
-  if (!tenant) {
-    const [newTenant] = await db
-      .insert(tenants)
-      .values({
-        code: "WERK-1000",
-        name: "Produktionswerk München",
-        sapPlantCode: "1000",
-      })
-      .returning();
-    tenant = newTenant;
+  try {
+    tenant = await db.query.tenants.findFirst();
+
+    if (!tenant) {
+      const [newTenant] = await db
+        .insert(tenants)
+        .values({
+          code: "WERK-1000",
+          name: "Produktionswerk München",
+          sapPlantCode: "1000",
+        })
+        .returning();
+      tenant = newTenant;
+    }
+
+    if (tenant) {
+      existingTemplate = await db.query.inspectionTemplates.findFirst({
+        where: (t, { eq }) => eq(t.tenantId, tenant.id),
+      });
+    }
+  } catch (dbErr) {
+    // Graceful Fallback: Lokaler Demo-/Offline-Modus ohne laufende PostgreSQL-Instanz
+    tenant = {
+      id: "demo-tenant-1000",
+      code: "WERK-1000",
+      name: "Produktionswerk München (Demo-Modus)",
+      sapPlantCode: "1000",
+      sapSyncMode: "STANDALONE" as const,
+    };
   }
-
-  // Erstes aktives Template laden, falls vorhanden
-  const existingTemplate = await db.query.inspectionTemplates.findFirst({
-    where: (t, { eq }) => eq(t.tenantId, tenant.id),
-  });
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 p-6 md:p-8 space-y-6">
