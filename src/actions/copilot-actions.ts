@@ -15,17 +15,53 @@ import {
   ClassifyCopilotInputPayload,
   CopilotClassificationResult,
   QueryOrdersParams,
+  ClarificationOption,
+  CreateOrderParams,
+  DraftOrderPayload,
+  OrderDraftWidgetPayload,
+  ChartViewWidgetPayload,
+  TableViewWidgetPayload,
+  CopilotInlineWidgetPayload,
 } from "@/lib/ai/copilot";
 import { executeAnalyticsPrompt, AnalyticsQueryOutput } from "@/lib/ai/analytics-agent";
 import { analyzeFaultInput, FaultCopilotAnalysisResult } from "@/lib/ai/fault-copilot";
 import { validateWithZod } from "./action-utils";
 
-const classifyCopilotPayloadSchema = z.object({
-  prompt: z.string(),
-  tenantId: z.string().optional(),
-  currentViewContext: z.record(z.any()).optional(),
-  clarificationResponse: z.string().optional(),
-});
+export type {
+  OrderDraftWidgetPayload,
+  ChartViewWidgetPayload,
+  TableViewWidgetPayload,
+  CopilotInlineWidgetPayload,
+};
+
+const classifyCopilotPayloadSchema = z
+  .object({
+    prompt: z.string(),
+    tenantId: z.string().optional(),
+    currentViewContext: z.record(z.any()).optional(),
+    clarificationResponse: z.string().optional(),
+    pendingDescription: z.string().optional(),
+    conversationHistory: z
+      .array(
+        z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string(),
+        })
+      )
+      .optional(),
+    chatHistory: z.array(z.any()).optional(),
+    selectedOptionId: z.string().optional(),
+    clarificationSelection: z
+      .object({
+        field: z.enum(["area", "equipment", "general"]),
+        id: z.string(),
+        value: z.string(),
+      })
+      .optional(),
+    availableAreas: z.array(z.any()).optional(),
+    availableEquipments: z.array(z.any()).optional(),
+  })
+  .passthrough();
 
 export interface DashboardOrderResultItem {
   id: string;
@@ -52,6 +88,11 @@ export interface SingleInputExecutionResult {
   data?: any;
   error?: string;
   classification: CopilotClassificationResult;
+  needsClarification?: boolean;
+  clarificationQuestion?: string;
+  clarificationOptions?: ClarificationOption[];
+  extractedOrder?: CreateOrderParams;
+  draftOrder?: DraftOrderPayload;
   ordersResult?: {
     totalFound: number;
     orders: DashboardOrderResultItem[];
@@ -62,13 +103,55 @@ export interface SingleInputExecutionResult {
     description: string;
     priority: "1_EMERGENCY" | "2_HIGH" | "3_MEDIUM" | "4_LOW";
     matchedEquipmentId?: string;
+    equipmentId?: string;
     equipmentName?: string;
+    functionalLocation?: string;
+    suggestedDamageCode?: string;
+    damageCode?: string;
     copilotAnalysis?: FaultCopilotAnalysisResult;
   };
   appliedViewConfig?: {
     refreshInterval?: number;
     displayDensity?: "compact" | "standard" | "detailed";
   };
+  // Saubere Payload-Struktur für Inline-Widgets
+  widget?: CopilotInlineWidgetPayload;
+  type?: "order_draft" | "chart_view" | "table_view";
+  // Direkte Felder für type: 'order_draft'
+  title?: string;
+  description?: string;
+  priority?: "1_EMERGENCY" | "2_HIGH" | "3_MEDIUM" | "4_LOW";
+  equipmentId?: string;
+  equipmentName?: string;
+  functionalLocation?: string;
+  suggestedDamageCode?: string;
+  // Direkte Felder für type: 'chart_view'
+  chartType?: "bar" | "line" | "pie" | "kpi" | "table";
+  chartConfig?: Record<string, any>;
+  chartData?: any[];
+  // Direkte Felder für type: 'table_view'
+  orders?: DashboardOrderResultItem[];
+  totalFound?: number;
+}
+
+export interface CopilotClassificationActionResult extends CopilotClassificationResult {
+  success: boolean;
+  data: CopilotClassificationResult;
+  error?: string;
+  needsClarification: boolean;
+  clarificationQuestion?: string;
+  clarificationOptions: ClarificationOption[];
+  extractedOrder?: CreateOrderParams;
+  draftOrder?: DraftOrderPayload;
+  widget?: CopilotInlineWidgetPayload;
+  type?: "order_draft" | "chart_view" | "table_view";
+  title?: string;
+  description?: string;
+  priority?: "1_EMERGENCY" | "2_HIGH" | "3_MEDIUM" | "4_LOW";
+  equipmentId?: string;
+  equipmentName?: string;
+  functionalLocation?: string;
+  suggestedDamageCode?: string;
 }
 
 /**
@@ -76,27 +159,57 @@ export interface SingleInputExecutionResult {
  */
 export async function classifyCopilotInputAction(
   payload: ClassifyCopilotInputPayload
-): Promise<CopilotClassificationResult & { success: boolean; data: CopilotClassificationResult; error?: string }> {
+): Promise<CopilotClassificationActionResult> {
   try {
     const validation = validateWithZod(classifyCopilotPayloadSchema, payload);
     const safePayload: ClassifyCopilotInputPayload = validation.success ? validation.data : payload;
     const result = await classifyCopilotIntent(safePayload);
-    return Object.assign(result, {
+    const needsClarification = Boolean(result.clarification?.needed || result.clarification?.needsClarification);
+    const clarificationQuestion = result.clarification?.clarificationQuestion || result.clarification?.question;
+    const clarificationOptions = result.clarification?.options || [];
+
+    const actionResult = Object.assign(result, {
       success: true,
       data: result,
+      needsClarification,
+      clarificationQuestion,
+      clarificationOptions,
+      extractedOrder: result.createOrder,
+      draftOrder: result.draftOrder,
+      widget: result.widget,
+      type: result.type,
     });
+
+    if (result.widget?.type === "order_draft") {
+      Object.assign(actionResult, {
+        title: result.widget.title,
+        description: result.widget.description,
+        priority: result.widget.priority,
+        equipmentId: result.widget.equipmentId,
+        equipmentName: result.widget.equipmentName,
+        functionalLocation: result.widget.functionalLocation,
+        suggestedDamageCode: result.widget.suggestedDamageCode,
+      });
+    }
+
+    return actionResult;
   } catch (err: any) {
     console.error("Fehler in classifyCopilotInputAction:", err);
     const fallback: CopilotClassificationResult = {
       intent: "QUERY_ORDERS",
       confidence: 0,
-      clarification: { needed: false, options: [] },
+      clarification: { needed: false, needsClarification: false, options: [] },
       explanation: err?.message || "Klassifizierung fehlgeschlagen.",
       rawPrompt: payload.prompt || "",
     };
     return Object.assign(fallback, {
       success: false,
       data: fallback,
+      needsClarification: false,
+      clarificationQuestion: undefined,
+      clarificationOptions: [],
+      extractedOrder: undefined,
+      draftOrder: undefined,
       error: err?.message || "Klassifizierung fehlgeschlagen.",
     });
   }
@@ -121,6 +234,10 @@ export async function executeSingleInputCopilotAction(
     const result: SingleInputExecutionResult = {
       success: true,
       classification,
+      needsClarification: Boolean(classification.clarification?.needed),
+      clarificationQuestion: classification.clarification?.question,
+      clarificationOptions: classification.clarification?.options || [],
+      extractedOrder: classification.createOrder,
     };
 
     // Falls Klärungsbedarf besteht, noch keine Ausführung anstoßen, sondern Optionen an Frontend reichen
@@ -220,67 +337,138 @@ export async function executeSingleInputCopilotAction(
         totalFound: mappedOrders.length,
         orders: mappedOrders,
       };
+
+      const tableViewWidget: TableViewWidgetPayload = {
+        type: "table_view",
+        orders: mappedOrders,
+        totalFound: mappedOrders.length,
+        filters: qParams,
+      };
+      result.widget = tableViewWidget;
+      result.type = "table_view";
+      result.orders = mappedOrders;
+      result.totalFound = mappedOrders.length;
     } catch (err) {
       console.warn("[Copilot Action] DB-Abfrage fehlgeschlagen, liefere Demodaten:", err);
+      const fallbackOrders: DashboardOrderResultItem[] = [
+        {
+          id: "mo-demo-1092",
+          orderNumber: "#1092",
+          title: "Antriebsüberlast Achse 2",
+          description: "Roboterzelle meldet intermittierende Überlast bei Taktzeitspitze",
+          priority: "2_HIGH",
+          statusCode: "IN_WORK",
+          statusName: "In Arbeit",
+          equipmentName: "KUKA KR210 R2700",
+          equipmentNumber: "EQ-10001001",
+          functionalLocationCode: "FL-H1-01",
+          assignedToName: "Max Meister",
+          plannedDurationMinutes: 120,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: "mo-demo-1093",
+          orderNumber: "#1093",
+          title: "Druckverlust Primärkreislauf",
+          description: "Kreiselpumpe P-101 zeigt Druckabfall von 4.2 auf 1.8 bar",
+          priority: "1_EMERGENCY",
+          statusCode: "CREATED",
+          statusName: "Erfasst",
+          equipmentName: "Kreiselpumpe KSB Etanorm",
+          equipmentNumber: "EQ-10001005",
+          functionalLocationCode: "FL-H1-02",
+          assignedToName: null,
+          plannedDurationMinutes: 60,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+
       result.ordersResult = {
-        totalFound: 2,
-        orders: [
-          {
-            id: "mo-demo-1092",
-            orderNumber: "#1092",
-            title: "Antriebsüberlast Achse 2",
-            description: "Roboterzelle meldet intermittierende Überlast bei Taktzeitspitze",
-            priority: "2_HIGH",
-            statusCode: "IN_WORK",
-            statusName: "In Arbeit",
-            equipmentName: "KUKA KR210 R2700",
-            equipmentNumber: "EQ-10001001",
-            functionalLocationCode: "FL-H1-01",
-            assignedToName: "Max Meister",
-            plannedDurationMinutes: 120,
-            createdAt: new Date().toISOString(),
-          },
-          {
-            id: "mo-demo-1093",
-            orderNumber: "#1093",
-            title: "Druckverlust Primärkreislauf",
-            description: "Kreiselpumpe P-101 zeigt Druckabfall von 4.2 auf 1.8 bar",
-            priority: "1_EMERGENCY",
-            statusCode: "CREATED",
-            statusName: "Erfasst",
-            equipmentName: "Kreiselpumpe KSB Etanorm",
-            equipmentNumber: "EQ-10001005",
-            functionalLocationCode: "FL-H1-02",
-            assignedToName: null,
-            plannedDurationMinutes: 60,
-            createdAt: new Date().toISOString(),
-          },
-        ],
+        totalFound: fallbackOrders.length,
+        orders: fallbackOrders,
       };
+      const tableViewWidget: TableViewWidgetPayload = {
+        type: "table_view",
+        orders: fallbackOrders,
+        totalFound: fallbackOrders.length,
+        filters: qParams,
+      };
+      result.widget = tableViewWidget;
+      result.type = "table_view";
+      result.orders = fallbackOrders;
+      result.totalFound = fallbackOrders.length;
     }
   }
 
   // 2. CREATE_ORDER Entwurf vorbereiten
-  if (classification.intent === "CREATE_ORDER" && classification.createOrder) {
+  if (classification.intent === "CREATE_ORDER" && (classification.createOrder || classification.draftOrder)) {
     const cOrder = classification.createOrder;
-    let copilotAnalysis: FaultCopilotAnalysisResult | undefined;
+    const draft = classification.draftOrder;
+    const eqId = draft?.equipmentId || cOrder?.matchedEquipmentId || cOrder?.equipmentId;
+    const eqName = draft?.equipmentName || cOrder?.equipmentName;
+    const title = draft?.title || cOrder?.title || "Störungsmeldung";
+    const description = draft?.description || cOrder?.description || "";
+    const priority = draft?.priority || cOrder?.priority || "2_HIGH";
+    const suggestedDamageCode = draft?.suggestedDamageCode || cOrder?.suggestedDamageCode || cOrder?.damageCode || "MECH_TEMP";
+    const functionalLocation =
+      draft?.functionalLocation ||
+      (classification.widget?.type === "order_draft" ? classification.widget.functionalLocation : "") ||
+      "";
 
-    try {
-      copilotAnalysis = await analyzeFaultInput({
-        tenantId,
-        equipmentId: cOrder.matchedEquipmentId,
-        userInputText: cOrder.description || cOrder.title,
-      });
-    } catch (e) {
-      // Analyse optional
+    let copilotAnalysis: FaultCopilotAnalysisResult | undefined;
+    if (eqId) {
+      try {
+        copilotAnalysis = await analyzeFaultInput({
+          tenantId,
+          equipmentId: eqId,
+          userInputText: description || title,
+        });
+      } catch (e) {
+        // Analyse optional
+      }
     }
 
+    const structuredDraft: DraftOrderPayload = {
+      title,
+      description,
+      priority,
+      equipmentId: eqId || "",
+      equipmentName: eqName || "",
+      functionalLocation,
+      suggestedDamageCode,
+    };
+
+    const orderDraftWidget: OrderDraftWidgetPayload = {
+      type: "order_draft",
+      title,
+      description,
+      priority,
+      equipmentId: eqId || "",
+      equipmentName: eqName || "",
+      functionalLocation,
+      suggestedDamageCode,
+    };
+
+    result.draftOrder = structuredDraft;
+    result.widget = orderDraftWidget;
+    result.type = "order_draft";
+    result.title = title;
+    result.description = description;
+    result.priority = priority;
+    result.equipmentId = eqId || "";
+    result.equipmentName = eqName || "";
+    result.functionalLocation = functionalLocation;
+    result.suggestedDamageCode = suggestedDamageCode;
     result.createOrderDraft = {
-      title: cOrder.title,
-      description: cOrder.description,
-      priority: cOrder.priority,
-      matchedEquipmentId: cOrder.matchedEquipmentId,
-      equipmentName: cOrder.equipmentName,
+      title,
+      description,
+      priority,
+      matchedEquipmentId: eqId,
+      equipmentId: eqId,
+      equipmentName: eqName,
+      functionalLocation,
+      suggestedDamageCode,
+      damageCode: suggestedDamageCode,
       copilotAnalysis,
     };
   }
@@ -294,15 +482,215 @@ export async function executeSingleInputCopilotAction(
   }
 
   // 4. ANALYTICS_CHART ausführen
-  if (classification.intent === "ANALYTICS_CHART" && classification.analyticsChart) {
+  if (classification.intent === "ANALYTICS_CHART") {
     try {
+      const userPrompt =
+        classification.analyticsChart?.analyticsPrompt ||
+        safePayload.prompt ||
+        "";
+
+      const rawHistory = safePayload.chatHistory || safePayload.conversationHistory || [];
+      const chatHistory = rawHistory
+        .filter((m: any) => m && (m.role === "user" || m.role === "assistant"))
+        .map((m: any) => ({
+          role: m.role as "user" | "assistant",
+          content: typeof m.content === "string" ? m.content : typeof m.text === "string" ? m.text : "",
+        }));
+
       const analyticsResult = await executeAnalyticsPrompt({
         tenantId,
-        userPrompt: classification.analyticsChart.analyticsPrompt,
+        userPrompt,
+        chatHistory,
       });
       result.analyticsResult = analyticsResult;
-    } catch (err) {
-      console.warn("[Copilot Action] Analytics Ausführung fehlgeschlagen:", err);
+
+      // Behandle den Fall status === "NEEDS_CLARIFICATION"
+      if (analyticsResult?.status === "NEEDS_CLARIFICATION") {
+        const clarificationQuestion =
+          analyticsResult.clarificationQuestion ||
+          "Bitte spezifizieren Sie Ihre Anfrage für das Diagramm:";
+
+        const clarificationOptions: ClarificationOption[] = (
+          analyticsResult.suggestedClarifications || []
+        ).map((item, idx) => ({
+          id: `clarification-opt-${idx + 1}`,
+          label: item,
+          value: item,
+          field: "general" as const,
+        }));
+
+        result.needsClarification = true;
+        result.clarificationQuestion = clarificationQuestion;
+        result.clarificationOptions = clarificationOptions;
+
+        result.classification.clarification = {
+          needed: true,
+          needsClarification: true,
+          question: clarificationQuestion,
+          clarificationQuestion,
+          options: clarificationOptions,
+          field: "general",
+        };
+        result.classification.needsClarification = true;
+        result.classification.clarificationQuestion = clarificationQuestion;
+        result.classification.clarificationOptions = clarificationOptions;
+
+        result.data = { ...result };
+        return result;
+      }
+
+      // Bei Erfolg (status === "SUCCESS" bzw. Standard-Ergebnis):
+      const validChartTypes = ["bar", "line", "pie", "table"] as const;
+      type ValidChartType = (typeof validChartTypes)[number];
+      const chartType: ValidChartType = validChartTypes.includes(
+        analyticsResult?.chartType as ValidChartType
+      )
+        ? (analyticsResult.chartType as ValidChartType)
+        : (validChartTypes.includes(classification.analyticsChart?.chartType as ValidChartType)
+            ? (classification.analyticsChart?.chartType as ValidChartType)
+            : "bar");
+
+      const title =
+        analyticsResult?.title ||
+        classification.analyticsChart?.analyticsPrompt ||
+        "Kennzahlen-Analyse";
+
+      const chartData =
+        analyticsResult?.data && Array.isArray(analyticsResult.data)
+          ? analyticsResult.data
+          : [];
+
+      const xAxisKey = analyticsResult?.xAxisKey || "name";
+
+      const validColors = [
+        "#3B82F6",
+        "#10B981",
+        "#F59E0B",
+        "#EF4444",
+        "#8B5CF6",
+        "#EC4899",
+        "#14B8A6",
+        "#F97316",
+      ];
+
+      let series: Array<{ key: string; label: string; color: string }> = [];
+      if (
+        analyticsResult?.series &&
+        Array.isArray(analyticsResult.series) &&
+        analyticsResult.series.length > 0
+      ) {
+        series = analyticsResult.series.map((s, idx) => ({
+          key: s.key || `value_${idx}`,
+          label: s.label || s.key || "Wert",
+          color: s.color || validColors[idx % validColors.length],
+        }));
+      }
+
+      if (series.length === 0) {
+        series = [
+          {
+            key: "value",
+            label: classification.analyticsChart?.metric || "Wert",
+            color: "#3B82F6",
+          },
+        ];
+      }
+
+      const summary = analyticsResult?.summaryInsight || classification.explanation || "";
+      const rawSql = analyticsResult?.rawSqlUsed;
+
+      const chartViewWidget: ChartViewWidgetPayload = {
+        type: "chart_view",
+        title,
+        chartType,
+        chartData,
+        data: chartData,
+        xAxisKey,
+        series,
+        config: {
+          chartType,
+          xAxisKey,
+          series,
+          responsive: true,
+          margin: { top: 12, right: 24, left: 0, bottom: 24 },
+          grid: { strokeDasharray: "3 3", stroke: "#e2e8f0" },
+          tooltip: {
+            contentStyle: {
+              backgroundColor: "#ffffff",
+              borderRadius: "8px",
+              border: "1px solid #e2e8f0",
+            },
+          },
+          legend: { verticalAlign: "top", height: 36 },
+          colors: validColors,
+        },
+        summary,
+        rawSql,
+      };
+
+      result.widget = chartViewWidget;
+      result.type = "chart_view";
+      result.title = title;
+      result.chartType = chartType;
+      result.chartConfig = chartViewWidget.config;
+      result.chartData = chartData;
+    } catch (err: any) {
+      console.warn(
+        "[Copilot Action] Analytics Ausführung fehlgeschlagen, liefere sichere Fallback-Struktur:",
+        err
+      );
+      const fallbackChartType = "bar";
+      const fallbackData = [
+        { name: "KUKA KR 210", downtimeMinutes: 240, ordersCount: 4 },
+        { name: "Pumpe P-102", downtimeMinutes: 180, ordersCount: 2 },
+        { name: "Simotics Motor", downtimeMinutes: 90, ordersCount: 1 },
+      ];
+      const fallbackSeries = [
+        { key: "downtimeMinutes", label: "Stillstand (Minuten)", color: "#EF4444" },
+        { key: "ordersCount", label: "Anzahl Störungen", color: "#3B82F6" },
+      ];
+      const fallbackTitle =
+        classification.analyticsChart?.analyticsPrompt ||
+        safePayload.prompt ||
+        "Kennzahlen-Analyse";
+      const fallbackSummary =
+        "Hinweis: Live-Datenbank nicht erreichbar. Es werden Referenzdaten zur Visualisierung angezeigt.";
+
+      const chartViewWidget: ChartViewWidgetPayload = {
+        type: "chart_view",
+        title: fallbackTitle,
+        chartType: fallbackChartType,
+        chartData: fallbackData,
+        data: fallbackData,
+        xAxisKey: "name",
+        series: fallbackSeries,
+        config: {
+          chartType: fallbackChartType,
+          xAxisKey: "name",
+          series: fallbackSeries,
+          responsive: true,
+          margin: { top: 12, right: 24, left: 0, bottom: 24 },
+          grid: { strokeDasharray: "3 3", stroke: "#e2e8f0" },
+          tooltip: {
+            contentStyle: {
+              backgroundColor: "#ffffff",
+              borderRadius: "8px",
+              border: "1px solid #e2e8f0",
+            },
+          },
+          legend: { verticalAlign: "top", height: 36 },
+          colors: ["#3B82F6", "#EF4444", "#10B981"],
+        },
+        summary: fallbackSummary,
+        rawSql: "",
+      };
+
+      result.widget = chartViewWidget;
+      result.type = "chart_view";
+      result.title = fallbackTitle;
+      result.chartType = fallbackChartType;
+      result.chartConfig = chartViewWidget.config;
+      result.chartData = fallbackData;
     }
   }
 
@@ -313,16 +701,23 @@ export async function executeSingleInputCopilotAction(
   const fallbackClassification: CopilotClassificationResult = {
     intent: "QUERY_ORDERS",
     confidence: 0,
-    clarification: { needed: false, options: [] },
+    clarification: { needed: false, needsClarification: false, options: [] },
     explanation: err?.message || "Fehler bei der Aktionsausführung.",
-    rawPrompt: payload.prompt || "",
+    rawPrompt: payload?.prompt || "",
   };
-  return {
+  const fallbackResult: SingleInputExecutionResult = {
     success: false,
     error: err?.message || "Fehler bei der Aktionsausführung.",
-    data: null,
     classification: fallbackClassification,
+    needsClarification: false,
+    clarificationOptions: [],
+    ordersResult: {
+      totalFound: 0,
+      orders: [],
+    },
   };
+  fallbackResult.data = { ...fallbackResult };
+  return fallbackResult;
 }
 }
 
