@@ -18,3 +18,4 @@
    - Agent 4 (AI & Analytics): `src/lib/ai/`, `src/app/api/ai/`, `src/components/analytics/`
    - Agent 5 (Docs & Compliance): `docs/`, `README.md`
 7. **Verifikation**: Nach jeder Aufgabe müssen `npx tsc --noEmit` und `npx vitest run` fehlerfrei durchlaufen.
+8. **Git Commit:** Committe deine Änderungen mit aussagekräftigen Beschreibeungen

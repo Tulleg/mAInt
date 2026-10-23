@@ -84,6 +84,13 @@ Für unterschiedliche Einsatzszenarien (vom Großbildschirm im Leitstand bis zum
   - Zusätzliche Kontextzeilen (Standort, Baugruppe, Schadensursache).
   - Optimiert für Servicetechniker und Meister mit Schutzhandschuhen an mobilen Industrie-Tablets.
 
+### Widescreen- & Leitstand-Layout (Großbildschirm-Optimierung)
+Für den dauerhaften Einsatz auf Leitstand-Monitoren, Fertigungs-Dashboards und Widescreen-Displays (1440p, 4K, 21:9 Ultra-Wide) skaliert der Conversational Workspace dynamisch:
+- **Erweiterter Chat-Container (`2xl:max-w-[1600px]`):** Der Arbeitsbereich nutzt den verfügbaren Bildschirmplatz voll aus, bleibt dabei zentriert (`mx-auto`) und behält mit responsivem Padding (`px-4 sm:px-6 lg:px-8`) an allen Displayrändern eine saubere Optik.
+- **Vollbreite für KI-Visualisierungen & Tabellen (`2xl:max-w-7xl`):** Die künstliche Breitenbeschränkung früherer Versionen (`max-w-3xl` / 768px) wurde aufgehoben. Prompt-to-Chart-Diagramme, tabellarische Störungslisten und Störungsentwürfe skalieren auf bis zu `max-w-5xl xl:max-w-6xl 2xl:max-w-7xl`, sodass komplexe Datensätze, Gantt-Ausschnitte und KPI-Trends ohne horizontales Scrollen auf einen Blick erfassbar sind.
+- **Bündige Sticky-Bottom-Eingabeleiste:** Die fixierte Eingabeleiste am unteren Bildschirmrand fluchtet exakt mit dem Chatverlauf darüber (`max-w-7xl 2xl:max-w-[1600px]`), wodurch ein harmonisches, ergonomisches Gesamtbild entsteht.
+- **Proportionale Nutzer-Nachrichten & Hero-Screen:** Eigene Eingaben und Prompts sind auf `max-w-2xl xl:max-w-3xl` erweitert und der Hero-Begrüßungsscreen auf `max-w-4xl` angepasst, um auch detaillierte Störungsbeschreibungen auf Großbildschirmen ausgewogen darzustellen.
+
 ---
 
 ## 5. Offline-First & SAP PM Synchronisation

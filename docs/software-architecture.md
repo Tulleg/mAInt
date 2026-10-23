@@ -2,8 +2,8 @@
 
 > **Status:** Aktiv / Lebendes Dokument (Living Architecture Document)  
 > **System:** MaintAI – Industrielles CMMS & SAP PM/MM Middleware  
-> **Version:** 1.2.0  
-> **Letzte Aktualisierung:** 2026-10-22  
+> **Version:** 1.5.0  
+> **Letzte Aktualisierung:** 2026-10-23  
 > **Referenzierte Richtlinie:** [Entwicklungsrichtlinien](../.gemini.md)
 
 ---
@@ -30,6 +30,8 @@
      - 4.2.7 Wartungsplanung & Dispositionsboard (Gantt & Batch Grid)
      - 4.2.8 Hierarchische Anlagenverwaltung & Stammdaten-Governance (`src/actions/asset-actions.ts`)
      - 4.2.9 Conversational Single-Input Workspace & Intent-Router (`src/lib/ai/copilot.ts`)
+     - 4.2.10 Dynamische KI-Schichtbegrüßung & Schichtkontext-Engine (`src/actions/greeting-actions.ts`, `src/lib/ai/greeting.ts`, `src/lib/greeting-utils.ts`)
+     - 4.2.11 Client-seitige Multi-Format-Export-Engine (`src/lib/export-utils.ts`)
 5. [Datenarchitektur & Persistenz](#5-datenarchitektur--persistenz)
    - 5.1 Drizzle ORM Schema & Mandantenfähigkeit (inkl. `user_saved_views`)
    - 5.2 Vektordatenbank & RAG (`pgvector`)
@@ -40,6 +42,7 @@
    - 6.2 Statusübergang mit Guard-Prüfungen & Audit-Trail
    - 6.3 Offline-Bearbeitung & Reconnect-Synchronisation
    - 6.4 Ersatzteilbuchung mit SAP-Outbox-Failover
+   - 6.5 Dynamische Schichtbegrüßung mit Resilienz-Fallback & Timeout
 7. [Verteilungssicht & Infrastruktur (Deployment)](#7-verteilungssicht--infrastruktur-deployment)
 8. [Querschnittliche Konzepte & Entwurfsentscheidungen](#8-querschnittliche-konzepte--entwurfsentscheidungen)
    - 8.1 Mandantenisolation (Tenant Isolation)
@@ -201,6 +204,7 @@ src/
 │   └── analytics-actions.ts
 ├── lib/                  # Domänen- & Infrastruktur-Logik (Framework-unabhängig)
 │   ├── workflow-engine.ts# Zustandsautomat für Auftragslebenszyklen
+│   ├── export-utils.ts   # 100% client-seitige Multi-Format-Exporte (PNG, PDF, CSV, Excel)
 │   ├── rbac/             # Rollen- & Rechteprüfung
 │   ├── sap/              # Adapter für OData, BAPI und Noop
 │   ├── offline/          # Dexie.js IndexedDB & Sync-Manager
@@ -367,6 +371,160 @@ flowchart TD
 5. **Auto-Refresh & Dichte-Steuerung:**
    - **Auto-Refresh:** Hintergrund-Polling über den Hook `useInterval` aktualisiert Auftragsdaten geräuschlos ohne UI-Flickern oder Reset des Tastaturfokus.
    - **Informationsdichte (`displayDensity`):** Steuert die tabellarische Informationsdichte in drei Stufen (`compact` für dichte Leitstand-Übersichten, `standard` für Desktop-Arbeitsplätze, `detailed` für Touch-fähige mobile Industrie-Tablets).
+
+6. **Responsives Widescreen- & Leitstand-Layout (`single-input-workspace.tsx`):**
+   - **Breitbild-Container:** Der Chat-Scrollbereich (`chatScrollContainerRef`) skaliert über `max-w-7xl 2xl:max-w-[1600px] mx-auto w-full px-4 sm:px-6 lg:px-8` dynamisch auf Widescreen- und Leitstand-Monitoren (z. B. 1440p, 4K, Ultra-Wide 21:9).
+   - **Entfesselte KI-Visualisierungen & Tabellen:** Die künstliche Breitenbeschränkung früherer Versionen (`max-w-3xl` / 768px) wurde aufgehoben. Assistenten-Karten für Diagramme (Prompt-to-Chart), tabellarische Auftragslisten (`table_view`) und Störungs-Drafts nutzen nun `max-w-5xl xl:max-w-6xl 2xl:max-w-7xl w-full space-y-3`, wodurch komplexe Tabellenspalten und Zeitreihen ohne erzwungenes horizontales Scrollen im Leitstandbetrieb lesbar bleiben.
+   - **Bündige Sticky-Bottom-Eingabeleiste:** Die fixierte Eingabeleiste ist auf `max-w-7xl 2xl:max-w-[1600px] mx-auto w-full space-y-2` mit kongruentem horizontalen Padding (`px-4 sm:px-6 lg:px-8`) austariert und fluchtet pixelgenau mit dem Chat-Verlauf.
+   - **Proportionale Nutzer-Prompts & Hero-Screen:** Benutzer-Nachrichten wachsen harmonisch mit (`max-w-2xl xl:max-w-3xl text-right`) und der Begrüßungs-Screen skaliert auf `max-w-4xl mx-auto w-full` für eine ausgewogene Ästhetik im Ruhezustand.
+
+#### 4.2.10 Dynamische KI-Schichtbegrüßung & Schichtkontext-Engine (`src/actions/greeting-actions.ts`, `src/lib/ai/greeting.ts`, `src/lib/greeting-utils.ts`)
+Zur Verbesserung der User Experience im industriellen Schichtbetrieb begrüßt MaintAI Werker, Techniker und Meister im Header des Conversational Workspace mit einer tageszeit- und schichtabhängigen Ansprache.
+
+1. **Server Action `generateDynamicGreetingAction`:**
+   - Schnittstelle: Nimmt optional Vornamen, Rolle, Schichtkontext, Werk/Standort und Mandanten-ID entgegen.
+   - **Automatische RBAC-Session-Auflösung:** Fehlt der Vorname, ermittelt die Server Action den Benutzer und Vornamen automatisch über `getCurrentUserRbac(tenantId)`.
+2. **Schichtkontext- & Zeitfenster-Erkennung (`determineShiftContext`, `getGreetingTimeSlot`):**
+   - `MORNING` / `morgen`: 05:00 - 10:59 Uhr (Frühschicht)
+   - `NOON` / `mahlzeit`: 11:00 - 13:59 Uhr (Mittagsschicht & Schichtübergabe)
+   - `AFTERNOON` / `tag`: 14:00 - 17:59 Uhr (Nachmittagsschicht)
+   - `EVENING` / `abend`: 18:00 - 21:59 Uhr (Spätschicht)
+   - `NIGHT` / `nacht`: 22:00 - 04:59 Uhr (Nachtschicht)
+3. **Resilientes LLM-Prompting mit 3.5s Timeout-Guard:**
+   - Ruft den aktiven `ILlmProvider` mit Task-Typ `"greeting"`, Low-Temperature (`0.7`) und maximal 50 Tokens auf.
+   - **Timeout-Rennen (`Promise.race`):** Ein 3500ms-Timeout stellt sicher, dass Netzwerkverzögerungen oder LLM-Kaltstarts den Seitenaufbau niemals blockieren.
+4. **Deterministischer Fallback-Pool (`FALLBACK_GREETINGS` / `FALLBACK_GREETING_POOL`):**
+   - Bei Timeouts, Offline-Status oder API-Fehlern liefert `getDeterministicFallbackGreeting` sofort eine handwerklich geprüfte, industrielle Begrüßung aus dem Pool (4 Varianten je Zeitfenster).
+   - Rückgabe-Objekt signalisiert über `isFallback: true` und `isAiGenerated: false` transparent den Status an das Frontend.
+
+#### 4.2.11 Client-seitige Multi-Format-Export-Engine (`src/lib/export-utils.ts`)
+
+Das Modul `src/lib/export-utils.ts` kapselt leichtgewichtige, performante Export-Funktionen für Diagramme (Recharts-SVGs) und tabellarische Auftragsdaten (`OrderWithRelations`). Gemäß den Architekturleitlinien für **PWA-Offline-Fähigkeit** und **DSGVO-Compliance** erfolgen sämtliche Konvertierungen, Rasterisierungen und Dokumentengenerierungen zu 100 % client-seitig direkt im Browser des Anwenders – ohne Latenz, ohne Server-Roundtrip und ohne Weiterleitung sensibler Instandhaltungsdaten an externe Konvertierungsdienste.
+
+##### 1. Schnittstellendefinitionen (TypeScript Interfaces & Signaturen)
+
+```typescript
+import { jsPDF } from "jspdf";
+import * as XLSX from "xlsx";
+import type { OrderWithRelations } from "@/actions/order-actions";
+
+/**
+ * Wandelt einen technischen Prioritäts-Enum in eine verständliche deutsche Bezeichnung um.
+ *
+ * @param priority Technischer DB-Wert ('1_EMERGENCY' | '2_HIGH' | '3_MEDIUM' | '4_LOW' | null | undefined)
+ * @returns Formatierte Bezeichnung (z. B. "1 - Notfall", "2 - Hoch", "3 - Mittel", "4 - Niedrig" oder "-")
+ */
+export function formatPriorityLabel(priority: string | null | undefined): string;
+
+/**
+ * Hilfsfunktion: Konvertiert ein SVG-Element in ein HTMLCanvasElement mit 2-facher Retina-Auflösung
+ * und deckendem weißen Hintergrund (#ffffff).
+ *
+ * @param svgElement Das zu rendernde SVGElement aus dem DOM
+ * @returns Promise auf das gerenderte HTMLCanvasElement
+ */
+export async function svgToCanvas(svgElement: SVGElement): Promise<HTMLCanvasElement>;
+
+/**
+ * Exportiert ein Recharts-SVG als hochauflösendes PNG (Rastergrafik).
+ *
+ * @param svgElement Das gerenderte SVG-Element des Diagramms (aus Inline-Card oder Zoom-Modal)
+ * @param filename Dateiname für den Download (Dateiendung .png wird bei Bedarf automatisch ergänzt)
+ */
+export async function exportChartToPng(svgElement: SVGElement, filename: string): Promise<void>;
+
+/**
+ * Exportiert ein Recharts-SVG als druckfertiges DIN-A4-Querformat-PDF mit standardisiertem MaintAI-Kopf.
+ *
+ * @param svgElement Das gerenderte SVG-Element des Diagramms
+ * @param filename Dateiname für den Download (Dateiendung .pdf wird bei Bedarf automatisch ergänzt)
+ * @param title Optionaler individueller Diagrammtitel im PDF-Header (Standard: "Ausfallzeiten nach Equipment (Halle 1)")
+ */
+export async function exportChartToPdf(
+  svgElement: SVGElement,
+  filename: string,
+  title?: string
+): Promise<void>;
+
+/**
+ * Exportiert Auftragsdaten als RFC-4180-konforme CSV-Datei mit Semikolon (;) und UTF-8-BOM.
+ *
+ * @param orders Array der zu exportierenden Auftragsdatensätze (OrderWithRelations)
+ * @param filename Dateiname für den Download (Dateiendung .csv wird bei Bedarf automatisch ergänzt)
+ */
+export function exportTableToCsv(orders: OrderWithRelations[], filename: string): void;
+
+/**
+ * Exportiert Auftragsdaten als strukturierte Excel-Arbeitsmappe (.xlsx) mit optimierten Spaltenbreiten.
+ *
+ * @param orders Array der zu exportierenden Auftragsdatensätze (OrderWithRelations)
+ * @param filename Dateiname für den Download (Dateiendung .xlsx wird bei Bedarf automatisch ergänzt)
+ */
+export function exportTableToExcel(orders: OrderWithRelations[], filename: string): void;
+```
+
+##### 2. Baustein-Architektur & Funktionsweise
+
+```mermaid
+flowchart LR
+    subgraph UI["Benutzeroberfläche (Workspace & Leitstand)"]
+        ChartUI["Recharts SVG (Inline / Zoom-Modal)"]
+        TableUI["TanStack / Dynamic Order Table"]
+    end
+
+    subgraph ExportEngine["Client-seitige Export-Engine (src/lib/export-utils.ts)"]
+        S2C["svgToCanvas (2x Retina, #fff BG)"]
+        PNG["exportChartToPng"]
+        PDF["exportChartToPdf (jsPDF A4 Landscape)"]
+        CSV["exportTableToCsv (RFC-4180, Semikolon, UTF-8 BOM)"]
+        XLSX_MOD["exportTableToExcel (SheetJS, Auto-Breiten)"]
+    end
+
+    subgraph ClientBrowser["Lokaler Browser (Download Trigger)"]
+        DL_PNG["Download: *.png"]
+        DL_PDF["Download: *.pdf"]
+        DL_CSV["Download: *.csv"]
+        DL_XLSX["Download: *.xlsx"]
+    end
+
+    ChartUI --> S2C
+    S2C --> PNG --> DL_PNG
+    S2C --> PDF --> DL_PDF
+    TableUI --> CSV --> DL_CSV
+    TableUI --> XLSX_MOD --> DL_XLSX
+```
+
+##### 3. Technische Spezifikationen der Export-Routinen
+
+- **`exportChartToPng`:**
+  - **Retina-Skalierung (`scale = 2`):** Verdoppelt die physikalische Pixelanzahl der Leinwand (`canvas.width = Math.round(width * 2)`), um Unschärfen auf hochauflösenden Displays oder beim Einfügen in Präsentationsfolien zu eliminieren.
+  - **Weißer Hintergrund (`ctx.fillStyle = '#ffffff'`):** Verhindert transparente Artefakte bei SVGs ohne eigene Hintergrundfarbe.
+  - **Browser-Download:** Wandelt den Canvas-Inhalt via `toDataURL("image/png")` in einen Data-URL-Link um und triggert einen klickbaren Anchor-Download (`<a download="...">`).
+
+- **`exportChartToPdf`:**
+  - **A4-Querformat (297 mm × 210 mm):** Initiiert ein `jsPDF`-Dokument mit Maßen `297x210mm`.
+  - **MaintAI Corporate Header:** Zeichnet einen dunkelblauen/schieferfarbenen Header-Balken (`slate-800` / `doc.setFillColor(30, 41, 59)`, 16 mm Höhe) über die volle Seitenbreite mit weißem Titel *"MaintAI Analyse-Export"* und lokalisiertem Zeitstempel (`toLocaleDateString('de-DE')` + `toLocaleTimeString('de-DE')`).
+  - **Inhaltsbereich & Aspect-Ratio-Preservation:** Berechnet die maximal verfügbare Zeichenfläche (`267 mm × 150 mm`) und skaliert das Diagrammbild unter strikter Einhaltung des nativen Breiten-/Höhenverhältnisses zentriert in den Inhaltsbereich.
+  - **Compliance-Footer:** Schließt das Dokument mit einem standardisierten Revisionshinweis ab: *"MaintAI Smart Maintenance Platform • Vertraulich • Nur für interne Instandhaltungszwecke • Seite 1 von 1"*.
+
+- **`exportTableToCsv`:**
+  - **DACH-Kompatibilität (Semikolon-Trennzeichen):** Verwendet Semikolons (`;`) anstelle von Kommas, um fehlerhafte Spaltentrennungen in deutschsprachigen Betriebssystemen und Tabellenprogrammen zu vermeiden.
+  - **UTF-8 Byte Order Mark (`\uFEFF`):** Setzt die UTF-8-BOM an den Dateianfang, sodass Microsoft Excel den Zeichensatz automatisch als UTF-8 erkennt und deutsche Umlaute (ä, ö, ü, ß) ohne Zeichensatzkonvertierungs-Dialog darstellt.
+  - **RFC-4180 Escaping:** Kapselt Zellenwerte mit Trennzeichen, Anführungszeichen oder Zeilenumbrüchen in doppelte Hochkommas (`"..."` mit `""`-Escaping).
+
+- **`exportTableToExcel`:**
+  - **OpenXML-Generierung via SheetJS (`xlsx`):** Erzeugt eine standardkonforme `.xlsx`-Arbeitsmappe mit dem Tabellenblatt *"Aufträge"*.
+  - **Ergonomische Spaltenbreiten (`worksheet["!cols"]`):** Hinterlegt vordefinierte Spaltenbreiten zur Vermeidung abgeschnittener Inhalte (Auftragsnummer: 18, Priorität: 14, Titel: 42, Equipment: 26, Status: 16, ErstelltAm: 20 Zeichen).
+  - **Sprechende Feldwerte:** Prioritäts-Codes werden vor dem Schreiben über `formatPriorityLabel` formatiert; Zeitstempel werden als lokalisierte Datumsstrings serialisiert.
+
+##### 4. Offline- & DSGVO-Vorgaben
+
+| Kriterium | Realisierung | Sicherheits- & Compliance-Vorteil |
+|---|---|---|
+| **Datenlokalität** | 100 % In-Memory im Browser | Keine Übertragung von Auftragsdaten, Störungsursachen oder Equipmentdaten an Drittanbieter-Server |
+| **PWA-Offline-Fähigkeit** | Reines Client-JS (`jsPDF`, `xlsx`, DOM Canvas) | Vollständig funktionsfähig auf Hallen-Tablets ohne Internet-/Netzwerkverbindung |
+| **Performance** | Asynchrone Canvas-/Blob-Generierung | Keine Belastung der Next.js Server Actions oder Datenbankverbindungen |
+| **DSGVO / GDPR** | Keine Server-Logs & keine Dritt-APIs | Keine Auftragsverarbeitungsverträge (AVV) für Export-Pipelines erforderlich |
 
 ---
 
@@ -628,6 +786,65 @@ sequenceDiagram
     Sync->>IDB: Aktualisiere lokalen Zustand mit Serverdaten
 ```
 
+### 6.4 Ersatzteilbuchung mit SAP-Outbox-Failover & Idempotenz-Schutz
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Tech as Servicetechniker
+    participant UI as Ersatzteil-Maske
+    participant Action as spare-parts-actions.ts
+    participant DB as PostgreSQL
+    participant SAP as SAP MM Connector
+    participant Queue as sap_sync_queue
+
+    Tech->>UI: Buche Material (MatNr, Menge, clientBookingOfflineId)
+    UI->>Action: bookSparePartAction(payload)
+    Action->>DB: Prüfe Idempotenz (clientBookingOfflineId)
+    alt Bereits gebucht (Idempotenz-Treffer)
+        DB-->>Action: Bestehender Buchungsdatensatz
+        Action-->>UI: Erfolgsmeldung (Idempotent bestätigt, kein Doppelabzug)
+    else Erstbuchung
+        Action->>DB: Lokaler Bestandsabzug (BEGIN TRANSACTION)
+        Action->>SAP: BAPI_GOODSMVT_CREATE (Bewegungsart 261)
+        alt SAP Online
+            SAP-->>Action: Belegnummer Materialbeleg
+            Action->>DB: Speichere sapDocumentNr & COMMIT
+        else SAP Timeout / Offline
+            Action->>Queue: INSERT INTO sap_sync_queue (Payload, Status: PENDING)
+            Action->>DB: COMMIT TRANSACTION (Lokal reserviert, SAP asynchron)
+        end
+        Action-->>UI: Buchung erfolgreich bestätigt
+    end
+```
+
+### 6.5 Dynamische Schichtbegrüßung mit Resilienz-Fallback & Timeout
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Werker / Techniker
+    participant Shell as App-Shell / Workspace UI
+    participant Action as greeting-actions.ts
+    participant Engine as greeting.ts (determineShiftContext)
+    participant AI as ILlmProvider (Gemini/Ollama)
+    participant Pool as Deterministic Fallback Pool
+
+    User->>Shell: Öffnet Dashboard (/)
+    Shell->>Action: generateDynamicGreetingAction({ firstName, role, plantName })
+    Action->>Engine: determineShiftContext(new Date()) -> MORNING/NOON/...
+    Action->>AI: Promise.race([ createChatCompletion(prompt), timeout(3500ms) ])
+    alt LLM antwortet innerhalb 3.5s
+        AI-->>Action: "Guten Morgen Tobias! Auf einen sicheren Produktionstag."
+        Action-->>Shell: { success: true, greeting, isAiGenerated: true, isFallback: false }
+    else Timeout (>3500ms) oder Provider-Fehler
+        Action->>Pool: getDeterministicFallbackGreeting(shiftContext, name)
+        Pool-->>Action: "Guten Morgen, Tobias! Bereit für deine Schicht?"
+        Action-->>Shell: { success: true, greeting, isAiGenerated: false, isFallback: true }
+    end
+    Shell-->>User: Rendert Begrüßungszeile im Header
+```
+
 ---
 
 ## 7. Verteilungssicht & Infrastruktur (Deployment)
@@ -735,7 +952,18 @@ Jede Query filtert primär nach `tenantId`. Dadurch wird sichergestellt, dass ke
   3. **Interaktiver Klärungsdialog (Clarification Loop):** Bei mehrdeutigen Angaben (z. B. unklare Aggregatbezeichnung) wird vor der Ausführung ein strukturierter Rückfragedialog mit 1-Klick-Auswahlbuttons (`ClarificationResult`) generiert.
   4. **Personalisierte Favoriten & Deep-Linking (`user_saved_views`):** Sichten, strukturierte Filterkriterien, Auto-Refresh-Intervalle (0s, 30s, 1m, 5m) und Informationsdichten (`compact`, `standard`, `detailed`) werden mandanten- und benutzerspezifisch in `user_saved_views` persistiert, in der linken Favoritenleiste bereitgestellt und über URL-Parameter (`?viewId=...`) deep-link-fähig gemacht.
   5. **Direktübergang in Störungsmaske:** Bei Erkennung von `CREATE_ORDER` wird eine interaktive Störungs-Entwurfskarte erzeugt, die alle extrahierten Parameter per Deep-Link (`/orders/new?...`) vorbefüllt an die zweigleisige Erfassungsmaske übergibt.
+  6. **Widescreen- & Leitstand-Skalierung:** Skalierung des zentralen Workspace-Containers auf `2xl:max-w-[1600px]` sowie der KI-Datenkarten (Tabellen, Recharts-Diagramme, Störungs-Drafts) auf bis zu `2xl:max-w-7xl`, um auf Leitstand-Monitoren und Ultra-Wide-Displays maximale Datenübersicht ohne horizontales Stauchen zu gewährleisten.
 - **Konsequenz:** Maximale Erfassungsgeschwindigkeit ohne Menühürden. Leitstände können den Workspace völlig bedienungsfrei als Live-Monitor nutzen. Erhöhte Resilienzanforderungen an das System werden durch deterministische Fallbacks und offline-fähige Caches abgefangen.
+
+### ADR-07: Resiliente KI-Schichtbegrüßung mit deterministischem Fallback-Pool & Timeout-Guard
+- **Status:** Angenommen
+- **Kontext:** Beim Starten der Anwendung und Betreten des Conversational Workspace (`/`) soll der Instandhalter oder Schichtleiter persönlich und schichtbezogen empfangen werden, um Nutzerakzeptanz und Arbeitsfluss zu stärken. Da LLM-Aufrufe (Gemini, Claude, lokale Ollama-Instanzen) Kaltstarts, Latenzschwankungen oder Offline-Zuständen unterliegen können, darf die Begrüßungsgenerierung unter keinen Umständen den Ladevorgang des Dashboards blockieren oder bei Netzwerkfehlern zu leeren/fehlerhaften UI-Zuständen führen.
+- **Entscheidung:**
+  1. Kapselung in der Next.js Server Action `generateDynamicGreetingAction` mit automatischer Vorname-/Rollenauflösung über die RBAC-Session (`getCurrentUserRbac`).
+  2. Implementierung einer deterministischen Schichtkontext-Erkennung (`determineShiftContext`) nach Uhrzeit (`MORNING`, `NOON`, `AFTERNOON`, `EVENING`, `NIGHT`).
+  3. Absicherung des LLM-Aufrufs (`ILlmProvider`) durch ein striktes 3,5-Sekunden-Rennen (`Promise.race([completionPromise, timeoutPromise])`).
+  4. Bereitstellung eines statischen, handwerklich geprüften Fallback-Pools (`FALLBACK_GREETINGS`) mit 4 spezifischen Grußformeln pro Schicht, die bei Timeouts, Fehlern oder Offline-Betrieb verzögerungsfrei ausgeliefert werden.
+- **Konsequenz:** Ladezeiten des Dashboards bleiben garantiert performant; maximale Resilienz im 24/7-Schichtbetrieb bei voller Personalisierung.
 
 ---
 
@@ -753,6 +981,9 @@ Dieses Dokument unterliegt der verbindlichen Entwicklungsrichtlinie gemäß [`.g
 
 | Version | Datum | Bearbeiter / Agent | Durchgeführte Änderungen |
 |---|---|---|---|
+| **1.5.0** | 2026-10-23 | Technical Documentation & Compliance Agent | **Widescreen- & Leitstand-Optimierung des Conversational Assistant Workspace:**<br>1. **Großbildschirm-Layout (Subsystem 4.2.9 & ADR-06):** Dokumentation der dynamischen Skalierung des zentralen Chat-Scrollcontainers und der Sticky-Eingabeleiste auf bis zu `2xl:max-w-[1600px]` (`px-4 sm:px-6 lg:px-8`).<br>2. **Aufhebung der Breitenbegrenzung für Datenkarten:** Erweiterung des KI-Karten-Wrappers von `max-w-3xl` (768px) auf `max-w-5xl xl:max-w-6xl 2xl:max-w-7xl` für Recharts-Analytics-Diagramme, interaktive Auftragstabellen und Störungs-Drafts.<br>3. **Fluchtendes UI-Design & Hero-Screen:** Ausrichtung der Benutzer-Prompts (`max-w-2xl xl:max-w-3xl`), Angleichung der Begrüßungs-Hero-Breite (`max-w-4xl`) und bündige Fluchtung der Sticky-Bottom-Leiste mit dem Chat-Stream.<br>4. **Anwender-Synchronisation:** Nachführung im Betriebshandbuch `docs/08-ki-stoerungserfassung.md` und in `docs/design-rules.md`. |
+| **1.4.0** | 2026-10-23 | Technical Documentation & Compliance Agent | **Client-seitige Multi-Format-Export-Engine (Diagramme & Tabellen):**<br>1. **Subsystem 4.2.11 (`src/lib/export-utils.ts`):** Dokumentation der Schnittstellendefinitionen für `exportChartToPng`, `exportChartToPdf`, `exportTableToCsv` und `exportTableToExcel` inklusive Typisierungen, Funktionssignaturen und Formatierungs-Pipelines.<br>2. **Offline- & DSGVO-Compliance:** Festhaltung der 100% browser- und client-seitigen Rendering-Architektur (DOM Canvas, `jsPDF`, SheetJS/`xlsx`) ohne externe Cloud-Dienste oder Datenübertragungen.<br>3. **Anwender-Handbuch:** Synchronisation mit `docs/05-ai-copilot-analytics.md` bezüglich der UI-Dropdowns im Workspace und Vollbild-Zoom-Modal (A4-Querformat Management-Summary mit Zeitstempel, 2x Retina-PNG, Excel-Auto-Breiten und RFC-4180 CSV mit UTF-8-BOM). |
+| **1.3.0** | 2026-10-23 | Technical Documentation & Compliance Agent | **Resiliente KI-Schichtbegrüßung, Offline-Idempotenz & AST-SQL-Security-Guards:**<br>1. **KI-Schichtbegrüßung & ADR-07:** Verankerung von ADR-07 und Dokumentation des Subsystems 4.2.10 (`src/actions/greeting-actions.ts`, `src/lib/ai/greeting.ts`, `src/lib/greeting-utils.ts`) inklusive 3.5s Timeout-Guard und deterministischem Fallback-Pool.<br>2. **Laufzeit- & Sequenzsicht:** Ergänzung der Sequenzdiagramme 6.4 (Ersatzteilbuchung mit SAP-Outbox-Failover & Idempotenz) und 6.5 (Dynamische Schichtbegrüßung mit Timeout-Schutz).<br>3. **Security- & Idempotenz-Härtungen:** Dokumentation der Idempotenz-Absicherung (`clientMutationId` & `clientBookingOfflineId`) gegen Doppelbuchungen sowie des AST-Level Read-Only Guards gegen SQL-Injections im Analytics-Agenten. |
 | **1.2.0** | 2026-10-22 | Technical Documentation & Compliance Agent | **Conversational-UI-Architektursynchronisation & ADR-06:**<br>1. **Architektur-Entscheidung (ADR-06):** Verankerung von ADR-06 für die Conversational-First Single-Input UI, den multimodalen Intent-Router und die dynamische Favoritenverwaltung.<br>2. **ERD-Validierung & Konsolidierung:** Vollständige synchrone Abbildung der Tabelle `user_saved_views` (inkl. `filter_payload`, `refresh_interval`, `display_density`, `position` und Unique Index `[user_id, name]`) im arc42-Datenmodell.<br>3. **Anwenderdokumentation:** Aktualisierung und Synchronisation der Anwender- und Betriebshandbücher (`docs/README.md`, `docs/08-ki-stoerungserfassung.md`) bezüglich Omni-Bar, Favoritenleiste, Störungsabsprung, flackerfreiem Auto-Refresh und Dichte-Steuerung. |
 | **1.1.0** | 2026-10-21 | Technical Documentation & Compliance Agent | **Conversational Workspace & Anlagenhierarchie:**<br>1. **Conversational Workspace:** Einführung des zentralen Single-Input-First Workspace (`/`) mit Omni-Bar (Freitext & Web Speech API Voice), dynamischer Favoritenleiste ("Meine Favoriten"), URL-Deep-Linking (`?viewId=...`), flackerfreiem Auto-Refresh-Polling (0, 30s, 1m, 5m) und dreistufiger Informationsdichte (`compact`, `standard`, `detailed`).<br>2. **Intent-Router:** Implementierung des KI-gestützten Intent-Routers (`classifyCopilotIntent`) mit Klassifikation von 4 Kern-Intents (`QUERY_ORDERS`, `CREATE_ORDER`, `UPDATE_VIEW_CONFIG`, `ANALYTICS_CHART`), interaktivem Klärungsdialog (`ClarificationResult`) und deterministischer Regex-/Keyword-Fallback-Engine.<br>3. **Datenmodell (ERD):** Ergänzung der relationalen Tabelle `user_saved_views` (Alias `savedViews`) im Drizzle-Schema und im ERD zur Speicherung benutzerindividueller Sichten und Ansichtsfilter.<br>4. **Anlagenhierarchie:** Abbildung der 4-stufigen Struktur (`areas` ➔ `functional_locations` ➔ `equipments` ➔ `assemblies`) inklusive Herkunftsflag `source` (`asset_source`: `SAP` vs. `MANUAL`), SAP-Schreibschutz (`assertManualAssetModificationAllowed`), SAP-Origin-Schutz (`assertNotSapSource`) und Standalone-Verwaltung. |
 | **1.0.0** | 2026-10-21 | Antigravity AI | Initiale Erstellung des ganzheitlichen Softwarearchitekturdokuments (arc42/IEEE-konform) inklusive aller Subsysteme, Diagramme und ADRs. |

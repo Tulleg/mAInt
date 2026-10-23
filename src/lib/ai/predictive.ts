@@ -154,7 +154,7 @@ export async function analyzeEquipmentPredictiveHealth(
   let plannerAlert: PredictiveEquipmentAnalysis["plannerAlert"] | undefined;
   if (riskScore >= 50 || failureTrend === "ACCELERATING") {
     try {
-      const ai = await getAiProvider(equipItem.tenantId);
+      const ai = await getAiProvider(equipItem.tenantId, { task: "analytics" });
       const prompt = `
 Erstelle eine industrielle Predictive Maintenance Warnung für das Planer-Dashboard.
 Anlage: ${equipItem.name} (${equipItem.equipmentNumber}), Kritikalität: ${equipItem.criticality}

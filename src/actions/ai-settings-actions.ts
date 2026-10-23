@@ -12,6 +12,9 @@ import {
   updateTenantAiConfig,
   testAiConnection,
   decryptApiKey,
+  OLLAMA_DEFAULT_CHAT_MODEL,
+  findTenant,
+  normalizeGeminiModel,
 } from "@/lib/ai/provider";
 import { actionSuccess, actionError, validateWithZod } from "./action-utils";
 
@@ -32,6 +35,8 @@ const updateConfigSchema = z.object({
     chatModel: z.string().min(1, "Chat-Modell ist erforderlich."),
     embeddingModel: z.string().min(1, "Embedding-Modell ist erforderlich."),
     embeddingDimensions: z.union([z.literal(768), z.literal(1536)]).optional(),
+    routingModel: z.string().optional(),
+    analyticsModel: z.string().optional(),
   }),
 });
 
@@ -41,7 +46,11 @@ const testConfigSchema = z.object({
   apiKey: z.string().optional(),
   chatModel: z.string().optional(),
   embeddingModel: z.string().optional(),
+  embeddingDimensions: z.number().optional(),
   tenantId: z.string().optional(),
+  model: z.string().optional(),
+  routingModel: z.string().optional(),
+  analyticsModel: z.string().optional(),
 });
 
 export type TenantAiConfigResponse = {
@@ -53,11 +62,14 @@ export type TenantAiConfigResponse = {
   hasApiKey?: boolean;
   maskedApiKey?: string;
   apiKey?: string;
+  routingModel?: string;
+  analyticsModel?: string;
 };
 
 export type TestAiProviderResult = {
   success: boolean;
   latencyMs: number;
+  model: string;
   message: string;
   error?: string;
   status?: "Online" | "Offline";
@@ -110,6 +122,8 @@ export async function updateTenantAiConfigAction(
     chatModel: string;
     embeddingModel: string;
     embeddingDimensions?: 768 | 1536;
+    routingModel?: string;
+    analyticsModel?: string;
   }
 ) {
   try {
@@ -159,13 +173,25 @@ export async function testAiProviderConnectionAction(
     }
   }
 
-  // Falls kein API-Key im Request übergeben wurde, aber eine tenantId hinterlegt ist:
+  const rawModel =
+    config.chatModel ||
+    config.model ||
+    (config.provider === "GEMINI"
+      ? process.env.GEMINI_MODEL || process.env.AI_MODEL_NAME || "gemini-3.8-flash"
+      : config.provider === "OLLAMA"
+      ? process.env.OLLAMA_MODEL || OLLAMA_DEFAULT_CHAT_MODEL
+      : config.provider === "VLLM"
+      ? process.env.VLLM_MODEL || "meta-llama/Meta-Llama-3-8B-Instruct"
+      : process.env.AI_MODEL_NAME || process.env.OPENAI_MODEL || "gpt-4o");
+
+  const selectedModel = config.provider === "GEMINI" ? normalizeGeminiModel(rawModel) : rawModel;
+  config.chatModel = selectedModel;
+
+  // Falls kein API-Key im Request übergeben wurde:
   // Verschlüsselten Key aus der Mandanten-Konfiguration in der Datenbank laden und entschlüsseln
-  if (!config.apiKey && config.tenantId) {
+  if (!config.apiKey) {
     try {
-      const tenant = await db.query.tenants.findFirst({
-        where: eq(tenants.id, config.tenantId),
-      });
+      const tenant = await findTenant(config.tenantId);
       if (tenant?.aiConfig?.apiKey) {
         config.apiKey = decryptApiKey(tenant.aiConfig.apiKey);
       }
@@ -174,16 +200,32 @@ export async function testAiProviderConnectionAction(
     }
   }
 
+  // Frühzeitige Validierung ungültiger / leerer Keys für Gemini
+  const key = (config.apiKey || "").trim();
+  if (config.provider === "GEMINI" && (!key || key === "invalid" || key.startsWith("invalid_") || key.length < 8)) {
+    return {
+      success: false,
+      latencyMs: 0,
+      model: selectedModel,
+      error: "API-Schlüssel ungültig oder abgelaufen",
+      message: "API-Schlüssel ungültig oder abgelaufen",
+      status: "Offline",
+      provider: config.provider as AiProviderType,
+      data: null,
+    };
+  }
+
   try {
     const validation = validateWithZod(testConfigSchema, config);
     if (!validation.success) {
       return {
         success: false,
         latencyMs: 0,
+        model: selectedModel,
         error: validation.error,
         message: validation.error,
         status: "Offline",
-        provider: config.provider,
+        provider: config.provider as AiProviderType,
         data: null,
       };
     }
@@ -207,6 +249,7 @@ export async function testAiProviderConnectionAction(
       return {
         success: false,
         latencyMs: testRes.latencyMs || 0,
+        model: testRes.model || selectedModel,
         error: finalError,
         message: finalError,
         status: "Offline",
@@ -218,6 +261,7 @@ export async function testAiProviderConnectionAction(
     return {
       success: true,
       latencyMs: testRes.latencyMs,
+      model: testRes.model || selectedModel,
       message: testRes.message,
       status: "Online",
       provider: testRes.provider,
@@ -236,10 +280,11 @@ export async function testAiProviderConnectionAction(
     return {
       success: false,
       latencyMs: 0,
+      model: selectedModel,
       error: finalError,
       message: finalError,
       status: "Offline",
-      provider: config?.provider,
+      provider: config?.provider as AiProviderType,
       data: null,
     };
   }
@@ -251,3 +296,4 @@ export async function testAiProviderConnectionAction(
 export async function testAiConnectionAction(config: AiProviderConfig) {
   return testAiProviderConnectionAction(config);
 }
+

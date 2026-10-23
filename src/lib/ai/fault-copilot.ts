@@ -7,6 +7,7 @@ import {
 } from "@/db/schema";
 import {
   getAiProvider,
+  getLlmModelForTask,
   mapToPgVectorDimensions,
   PGVECTOR_DIMENSIONS,
 } from "./provider";
@@ -59,7 +60,8 @@ export async function analyzeFaultInput(payload: {
   userInputText: string;
 }): Promise<FaultCopilotAnalysisResult> {
   const { tenantId, equipmentId, userInputText } = payload;
-  const aiProvider = await getAiProvider(tenantId);
+  const routingModel = await getLlmModelForTask("routing", tenantId);
+  const aiProvider = await getAiProvider(tenantId, { task: "routing", model: routingModel });
 
   // 1. Text-Embedding für den aktuellen Input berechnen (Garantierte 1536 Dimensionen für pgvector)
   const rawInputVector = await aiProvider.createEmbedding(userInputText);
@@ -151,7 +153,7 @@ Antworte im JSON-Format:
                 { role: "system", content: "Du bist ein präziser Instandhaltungs-Deduplizierer. Antworte in JSON." },
                 { role: "user", content: duplicatePrompt },
               ],
-              { jsonMode: true, temperature: 0.0 }
+              { jsonMode: true, temperature: 0.0, model: routingModel, task: "routing", tenantId }
             );
             const dupRes = JSON.parse(rawDup);
             if (dupRes.isDuplicate && dupRes.matchedOrderId) {
@@ -309,7 +311,7 @@ Erstelle nun ein valides JSON-Objekt mit genau dieser Struktur:
         { role: "system", content: "Du erzeugst ausschließlich valides JSON ohne Markdown-Ticks." },
         { role: "user", content: synthesisPrompt },
       ],
-      { jsonMode: true, temperature: 0.1 }
+      { jsonMode: true, temperature: 0.1, model: routingModel, task: "routing", tenantId }
     );
 
     const parsed = JSON.parse(llmResponse);

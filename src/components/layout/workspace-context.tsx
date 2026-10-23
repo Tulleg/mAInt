@@ -163,6 +163,11 @@ export function WorkspaceProvider({
       return [...filtered, newView].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     });
     setActiveView(newView);
+    if (typeof window !== "undefined" && window.location.pathname === "/") {
+      const params = new URLSearchParams(window.location.search);
+      params.set("viewId", newView.id);
+      window.history.pushState(null, "", `/?${params.toString()}`);
+    }
   }, []);
 
   const switchRole = useCallback(

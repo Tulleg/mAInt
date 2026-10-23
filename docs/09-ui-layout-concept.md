@@ -48,6 +48,14 @@ MaintAI verfolgt ein **Conversational-First**-Bedienparadigma:
   - **KI-Erkenntnis-Badge (Footer):** Kontextuelle Zusammenfassungen und proaktive Handlungsempfehlungen (z. B. Identifikation von Klumpenrisiken und Prüfung der Ersatzteilverfügbarkeit im Lager).
 - **Referenz-Mockup:** Frame 3 ("03 - KI-Diagrammansicht (Prompt-to-Chart)") im Gesamt-Design-System `docs/maint-ai-design-system.figcraft` (Screenshot: `docs/screenshots/03 - KI-Diagrammansicht _Prompt-to-Chart_.png`).
 
+### 2.5 Dynamische KI-Schichtbegrüßung & Kontextbanner
+- **Kontextuelle Begrüßungszeile:** Im oberen Bereich des Workspace (`/`) wird der angemeldete Instandhalter oder Schichtleiter mit einer dynamischen, schichtbezogenen Begrüßung empfangen.
+- **Server Action `generateDynamicGreetingAction`:**
+  - Extrahiert Vorname und Rolle aus der aktiven RBAC-Session (`getCurrentUserRbac`).
+  - Erkennt automatisch das Zeitfenster (`MORNING`, `NOON`, `AFTERNOON`, `EVENING`, `NIGHT` bzw. `morgen`, `mahlzeit`, `tag`, `abend`, `nacht`).
+  - Ruft den aktiven LLM-Provider mit Low-Temperature (`0.7`) und striktem System-Prompt auf (max. 6-8 Wörter).
+  - **Resilienz & Ausfallsicherheit:** Deterministischer 3.5s Timeout mit automatischem Fallback auf den vordefinierten Begrüßungspool (`FALLBACK_GREETINGS`), sodass weder Netzwerkverzögerungen noch Offline-Zustände den Seitenaufbau blockieren.
+
 ---
 
 ## 3. Navigations- & Detailmasken-Standards

@@ -37,7 +37,8 @@ const scheduleCronReportSchema = z.object({
  */
 export async function executeAnalyticsPromptAction(
   tenantId: string,
-  userPrompt: string
+  userPrompt: string,
+  chatHistory?: Array<{ role: "user" | "assistant"; content: string }>
 ): Promise<AnalyticsQueryOutput & { success: boolean; data?: AnalyticsQueryOutput; error?: string }> {
   try {
     const validation = validateWithZod(
@@ -65,7 +66,7 @@ export async function executeAnalyticsPromptAction(
       }) as any;
     }
 
-    const res = await executeAnalyticsPrompt({ tenantId, userPrompt });
+    const res = await executeAnalyticsPrompt({ tenantId, userPrompt, chatHistory });
     return Object.assign(res, {
       success: true,
       data: res,
@@ -307,3 +308,4 @@ export async function previewScheduledReportHtmlAction(
     });
   }
 }
+

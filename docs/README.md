@@ -64,6 +64,7 @@ Willkommen im zentralen Anwender- und Betriebshandbuch für **MaintAI**, der ind
     - Kontinuierliche Störungsüberwachung via Favoritenleiste, flackerfreiem Auto-Refresh & Dichte-Steuerung
 11. [Conversational Single-Input Workspace & Favoriten](./09-ui-layout-concept.md)
     - Zentrales Omni-Eingabefeld (Sprach- & Freitext-Intents)
+    - Dynamische KI-Schichtbegrüßung & Schichtkontext-Engine
     - Dynamische Favoritenleiste ("Meine Favoriten") & Deep-Linking (`?viewId=...`)
     - Auto-Refresh (0s, 30s, 1m, 5m) für Live-Leitstandmonitore
     - Dichte-Steuerung (Compact, Standard, Detailed) für Desktop & Werkstatt-Tablets
@@ -132,3 +133,6 @@ Gemäß den [Design- & Navigationsrichtlinien](./design-rules.md) gilt für säm
 4. **Zweigleisige Störungserfassung (`/orders/new`):**
    - **Clarification Loop:** Interaktive 1-Klick-Auswahl bei mehrdeutigen Prompts im KI-Modus.
    - **Standardisierter Rücksprung:** Sichere Rückkehr zum Planungsboard (`/planning`) über den standardisierten 44px `ArrowLeft`-Button.
+5. **Dynamische KI-Schichtbegrüßung (`src/actions/greeting-actions.ts`):**
+   - **Kontextsensitive Ansprache:** Server Action `generateDynamicGreetingAction` ermittelt den Schichtkontext (`MORNING`, `NOON`, `AFTERNOON`, `EVENING`, `NIGHT`) sowie Vornamen/Rolle aus der RBAC-Session.
+   - **Resilienz & Ausfallsicherheit:** 3.5s Timeout-Guard und deterministischer Fallback-Pool garantieren verzögerungsfreie Auslieferung bei Offline-Zuständen oder Provider-Ausfällen.

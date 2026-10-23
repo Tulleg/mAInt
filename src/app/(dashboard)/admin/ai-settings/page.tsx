@@ -45,6 +45,34 @@ interface ModelOption {
 const AVAILABLE_CHAT_MODELS: ModelOption[] = [
   // Google Gemini
   {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description: "Standard / Ultraschnelles Modell für Routing, Instandhaltung, Copilot und Analysen",
+    provider: "GEMINI",
+    category: "CLOUD",
+  },
+  {
+    id: "gemini-1.5-flash",
+    name: "Gemini 1.5 Flash",
+    description: "Kostengünstiges Modell für Routing und Assistenz",
+    provider: "GEMINI",
+    category: "CLOUD",
+  },
+  {
+    id: "gemini-1.5-pro",
+    name: "Gemini 1.5 Pro",
+    description: "Großes Kontextfenster (bis 2 Mio. Tokens) für lange Handbücher & Pläne",
+    provider: "GEMINI",
+    category: "CLOUD",
+  },
+  {
+    id: "gemini-2.0-flash",
+    name: "Gemini 2.0 Flash",
+    description: "Ultraschnelle Inferenz mit neuester Gemini 2.0 Architektur",
+    provider: "GEMINI",
+    category: "CLOUD",
+  },
+  {
     id: "gemini-2.5-pro",
     name: "Gemini 2.5 Pro",
     description: "Flaggschiff-Modell für komplexe Ursachenanalysen & schreibgeschützte NL-to-SQL Generierung",
@@ -55,13 +83,6 @@ const AVAILABLE_CHAT_MODELS: ModelOption[] = [
     id: "gemini-2.5-flash",
     name: "Gemini 2.5 Flash",
     description: "Ultraschnelle Inferenz mit geringer Latenz für Live-Interaktionen",
-    provider: "GEMINI",
-    category: "CLOUD",
-  },
-  {
-    id: "gemini-1.5-pro",
-    name: "Gemini 1.5 Pro",
-    description: "Großes Kontextfenster (bis 2 Mio. Tokens) für lange Handbücher & Pläne",
     provider: "GEMINI",
     category: "CLOUD",
   },
@@ -155,9 +176,9 @@ export default function AiSettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const [maskedApiKey, setMaskedApiKey] = useState("");
-  const [chatModel, setChatModel] = useState("gemini-2.5-pro");
+  const [chatModel, setChatModel] = useState("gemini-3.8-flash");
   const [embeddingModel, setEmbeddingModel] = useState("text-embedding-004");
-  const [embeddingDimensions, setEmbeddingDimensions] = useState<768 | 1536>(1536);
+  const [embeddingDimensions, setEmbeddingDimensions] = useState<768 | 1536>(768);
 
   // Test Connection State
   const [testingConnection, setTestingConnection] = useState(false);
@@ -167,6 +188,7 @@ export default function AiSettingsPage() {
     latencyMs?: number;
     provider?: string;
     status?: "Online" | "Offline";
+    model?: string;
   } | null>(null);
 
   // Save Status Feedback
@@ -180,7 +202,7 @@ export default function AiSettingsPage() {
         if (cfg) {
           setProvider(cfg.provider);
           setEndpointUrl(cfg.endpointUrl || "");
-          setChatModel(cfg.chatModel || "gemini-2.5-pro");
+          setChatModel(cfg.chatModel || "gemini-3.8-flash");
           setEmbeddingModel(cfg.embeddingModel || "text-embedding-004");
           setEmbeddingDimensions(cfg.embeddingDimensions || 1536);
           if (cfg.hasApiKey) {
@@ -204,9 +226,9 @@ export default function AiSettingsPage() {
 
     if (presetType === "GEMINI") {
       setEndpointUrl("https://generativelanguage.googleapis.com/v1beta/openai");
-      setChatModel("gemini-2.5-pro");
+      setChatModel("gemini-1.5-flash");
       setEmbeddingModel("text-embedding-004");
-      setEmbeddingDimensions(1536);
+      setEmbeddingDimensions(768);
     } else if (presetType === "OPENAI") {
       setEndpointUrl("https://api.openai.com/v1");
       setChatModel("gpt-4o");
@@ -543,7 +565,8 @@ export default function AiSettingsPage() {
                         className="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
                       >
                         <optgroup label="Google Gemini (Cloud)">
-                          <option value="gemini-2.5-pro">gemini-2.5-pro (Empfohlen)</option>
+                          <option value="gemini-1.5-flash">gemini-1.5-flash (Standard / Fallback)</option>
+                          <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                           <option value="gemini-2.5-flash">gemini-2.5-flash (High-Speed)</option>
                           <option value="gemini-1.5-pro">gemini-1.5-pro</option>
                         </optgroup>
@@ -677,6 +700,11 @@ export default function AiSettingsPage() {
                         {typeof testResult.latencyMs === "number" && (
                           <Badge variant="outline" className="text-[10px] border-slate-700 bg-slate-900 text-slate-300">
                             {testResult.latencyMs} ms
+                          </Badge>
+                        )}
+                        {testResult.model && (
+                          <Badge variant="outline" className="text-[10px] border-slate-700 bg-slate-900 text-slate-300 font-mono">
+                            {testResult.model}
                           </Badge>
                         )}
                       </div>

@@ -1,4 +1,4 @@
-import { getAiProvider } from "./providers/ai-provider";
+import { getAiProvider, getLlmModelForTask } from "./providers/ai-provider";
 
 export interface ParsedFaultDraft {
   title: string;
@@ -25,7 +25,8 @@ export async function parseFaultPrompt(payload: {
   availableEquipments: Array<{ id: string; name: string; equipmentNumber: string }>;
 }): Promise<ParsedFaultDraft> {
   const { tenantId, prompt, availableEquipments } = payload;
-  const ai = await getAiProvider(tenantId);
+  const routingModel = await getLlmModelForTask("routing", tenantId);
+  const ai = await getAiProvider(tenantId, { task: "routing", model: routingModel });
 
   const systemInstructions = `
 Du bist ein erfahrener Meister und Instandhaltungs-Leitstand-Disponent.
@@ -71,7 +72,7 @@ Antworte IMMER als valides JSON:
         { role: "system", content: systemInstructions },
         { role: "user", content: `Werker-Meldung: "${prompt}"` },
       ],
-      { jsonMode: true, temperature: 0.1 }
+      { jsonMode: true, temperature: 0.1, model: routingModel, task: "routing", tenantId }
     );
     const parsed = JSON.parse(raw);
     return {

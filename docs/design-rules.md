@@ -19,7 +19,7 @@
 - **Herkunft Manuell:** `bg-slate-100 text-slate-600 border-slate-200`
 
 ## 3. UI-Elemente & Startseite (Conversational Workspace)
-- **Omni-Input:** `max-w-3xl w-full mx-auto bg-white rounded-2xl shadow-md border-slate-200`
+- **Omni-Input & Workspace-Container:** Hero-Zustand: `max-w-4xl w-full mx-auto`; Chat-Scrollbereich & Sticky-Eingabeleiste: responsiv `max-w-7xl 2xl:max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8`; KI-Visualisierungskarten (Diagramme/Tabellen): `max-w-5xl xl:max-w-6xl 2xl:max-w-7xl w-full`.
 - **Touch-Targets:** Mindestens `min-h-[44px]` für Buttons und Klickbereiche.
 - **Icons:** Ausschließlich aus `lucide-react`.
 - **FigCraft Vektor-Mockup:** Frame 1 ("01 - Startseite (Workspace initial)") in `docs/maint-ai-design-system.figcraft` (Screenshot: `docs/screenshots/01 - Startseite _Workspace initial_.png`).
@@ -47,8 +47,63 @@
     - **KI-Aktions-Button:** `[✨ Diagramm aus Tabelle generieren]` (Hervorgehoben mit Zauberstab-Icon `lucide: Wand2`, `border-blue-300`, `bg-blue-50 text-blue-700 font-bold`)
   - Rechts:
     - Dropdown: `Diagrammtyp: Säulendiagramm ▾`
-    - Dropdown: `🔄 Auto-Refresh: 30s ▾`
-    - Button: `[⭐ Zu Favoriten hinzufügen]`
+    - Dropdown: `🔄 Auto-Refresh: 30s ▾` (Intervall-Optionen: Aus, 30s, 1m, 5m)
+    - Button: `[⭐ Zu Favoriten hinzufügen]` (bzw. `[⭐ Zu Favoriten]`)
+
+### 5.1 UI-Standards: Favoriten-Button & Auto-Refresh im Chart-Header
+- **`[⭐ Zu Favoriten]`-Button:**
+  - **Token & Styling:** `inline-flex items-center gap-2 px-3.5 py-2 min-h-[44px] rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold transition-colors shadow-2xs`
+  - **Icon:** Lucide `Star` (`h-4 w-4 text-amber-500 fill-amber-500 shrink-0`)
+  - **Label:** `Zu Favoriten hinzufügen` (bzw. `Zu Favoriten`)
+  - **Touch-Target & Ergonomie:** Mindestens `min-h-[44px]` für fehlerfreie Touch-Bedienung an Werkstatt-Terminals und Mobilgeräten.
+  - **Feedback-Status (Quittierung):** Nach erfolgreichem Speichern wechselt der Text temporär (2.500 ms) auf `Gespeichert!`, begleitet vom gefüllten Stern-Icon (`fill-amber-500`).
+- **`🔄 Auto-Refresh`-Dropdown:**
+  - **Container-Tokens:** `flex items-center gap-2 text-xs text-slate-700 bg-white px-3 min-h-[44px] rounded-lg border border-slate-300 shadow-2xs`
+  - **Icon:** Lucide `RefreshCw` (`h-3.5 w-3.5 text-blue-600 shrink-0`)
+  - **Label:** `Auto-Refresh:` (`hidden sm:inline`)
+  - **Select-Element:** `bg-transparent text-slate-900 text-xs font-medium cursor-pointer outline-none min-h-[44px]`
+  - **Konfigurierbare Optionen:** `Aus` (0s), `30s` (30s Polling), `1m` (60s Polling), `5m` (300s Polling).
+
+### 5.2 UI-Standards: Sidebar-Favoriteneinträge & Intervall-Pill
+- **Favoriten-Eintrag in der linken Seitenleiste (`app-shell.tsx`):**
+  - **Container:** `w-full flex items-center justify-between px-3 py-2 min-h-[40px] rounded-lg text-xs font-medium transition-all text-left group`
+  - **Inaktiv:** `text-slate-700 hover:text-slate-900 hover:bg-slate-50 border border-transparent`
+    - Icon: Lucide `Star` (`h-3.5 w-3.5 shrink-0 transition-colors text-amber-500 fill-amber-500/30 group-hover:fill-amber-500`)
+  - **Aktiv (Ausgewählt):** `bg-blue-50 text-blue-700 border border-blue-200 font-medium shadow-xs`
+    - Icon: Lucide `Star` (`h-3.5 w-3.5 shrink-0 text-blue-600 fill-blue-600`)
+- **Intervall-Pill (Auto-Refresh Badge):**
+  - **Bedingung:** Wird automatisch rechtsbündig im Favoriteneintrag gerendert, wenn für die Ansicht ein aktives Polling-Intervall (`refreshInterval > 0`) hinterlegt ist.
+  - **Token & Styling:** `text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 shrink-0`
+  - **Typografie:** Technische Monospace-Schrift (`font-mono`) zur klaren Kennzeichnung von Systemzeit-Intervallen.
+  - **Textformat:** `{interval}s` (z. B. `30s`, `60s`, `300s`).
+  - **Layout-Stabilität:** `shrink-0` stellt sicher, dass die Pill bei längeren Titeln nicht gestaucht wird; der Favoritentitel links wird automatisch mit `truncate` gekürzt.
+  - **Kontrast & Lesbarkeit:** Fügt sich unaufdringlich in das helle Designsystem ein und behält sowohl im inaktiven Zustand als auch im aktiven Status (`bg-blue-50`) exzellente Kontrastwerte nach WCAG 2.1 AA.
+
+### 5.3 UI-Standards: Diagramm-Großansicht & ChartZoomModal
+- **Trigger im Chart-Header (`[⛶ Vergrößern]`):**
+  - **Button-Token:** `inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[38px] sm:min-h-[44px] rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all shadow-2xs cursor-pointer`
+  - **Icon:** Lucide `Maximize2` (`h-3.5 w-3.5 text-slate-500`)
+  - **Label:** `⛶ Vergrößern` (mit Tooltip *"Diagramm vergrößern"*)
+- **Backdrop & Overlay-Layering:**
+  - **Token & Styling:** `fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200`
+  - **Verhalten:** Dunkler Backdrop mit 60 % Deckkraft (`bg-black/60`) und sanftem Unschärfefilter (`backdrop-blur-sm`) fokussiert die Auswertung. Klick auf den Backdrop löst `onClose` aus.
+- **Modal-Shell (Industrial Light Theme):**
+  - **Container:** `w-full max-w-5xl xl:max-w-6xl max-h-[92vh] flex flex-col bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150 text-slate-900`
+  - Klicks im Modal werden per `e.stopPropagation()` isoliert.
+- **Header & Interaktionssteuerung (Barrierefreiheit & Touch-Ergonomie):**
+  - **Schließen-Button (`✕`):** Mindest-Touch-Target von 44px (`h-11 w-11 min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer`) mit Lucide `X` (`h-5 w-5`).
+  - **Tastatursteuerung:** `Escape`-Taste schließt das Modal zuverlässig per globalem Event-Listener (`window.addEventListener('keydown')`).
+  - **Modal-Aktionsbuttons:**
+    - `[⭐ Zu Favoriten]`: `inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[44px] rounded-xl border border-slate-300 bg-white hover:bg-amber-50 hover:border-amber-300 hover:text-amber-800 text-slate-700 text-xs sm:text-sm font-semibold transition-all shadow-2xs`
+    - `[📋 Als Tabelle]`: `inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[44px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold transition-all shadow-2xs`
+  - **Live-Status Badge:** `Vollbild-Analyse` mit grün pulsierendem Indikator (`h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse`).
+- **Vergrößerte Recharts-Canvas:**
+  - **Container:** `h-[60vh] sm:h-[65vh] w-full bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-xs flex flex-col`
+  - **Achsen & Typografie:** X-Achsenbeschriftung mit vollen Equipments/Anlagen ohne Verkrüppelung (`interval={0}`, `fontSize={12}`, `fontWeight={600}`, `#334155`), Y-Achse mit Einheit (`unit="h"`).
+  - **Interaktiver Tooltip:** Floating Card (`bg-white p-4 border border-slate-200 rounded-2xl shadow-xl text-xs min-w-[240px] animate-in zoom-in-95`) mit Stillstandsstunden, Vorfallanzahl und Prioritätsstufe.
+- **Footer mit KI-Erkenntnis & Zeitraum-Filter:**
+  - **KI-Erkenntnis Pill:** `flex-1 p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 flex items-center gap-2.5 text-xs sm:text-sm` mit Lucide `Lightbulb`.
+  - **Zeitraum-Filter:** Schnellumschaltung (`7 Tage`, `30 Tage`, `90 Tage`) in Segmented Control (`bg-slate-100 p-1 rounded-xl border border-slate-200`), aktive Option `bg-white text-blue-700 font-bold shadow-xs`, barrierefreie Touch-Höhe.
 - **Chart-Fläche (Recharts-Container auf weißer Card):**
   - Weißer Card-Container mit `border-slate-200 p-6 rounded-xl shadow-sm bg-white`.
   - Titel: *"Offene Störungen nach Gewerk & Priorität (Halle 1)"* (`text-slate-900 font-bold text-lg`).
@@ -70,7 +125,6 @@
   - Unten fixiert: '⚙️ Admin Settings' im aktiven Zustand (`bg-blue-50 text-blue-700 font-semibold rounded-lg`).
 - **Top Navbar:**
   - Status: Grüner Punkt `● Online`.
-  - Cloud-Sync-Badge: `SAP PM: Verbunden / Standalone bereit`.
   - Profil-Pill: `👤 Max Mustermann (Super-Admin)`.
 - **Hauptbereich (Admin-Settings Shell):**
   - Header mit Titel, Subline und Button `[💾 Alle Änderungen speichern]` (`bg-blue-600 text-white shadow-sm`).

@@ -212,11 +212,15 @@ export const tenants = pgTable(
       embeddingModel: string;
       embeddingDimensions: 768 | 1536;
       apiKey?: string;
+      routingModel?: string;
+      analyticsModel?: string;
     }>().default({
       provider: "OPENAI",
       chatModel: "gpt-4o",
       embeddingModel: "text-embedding-3-small",
       embeddingDimensions: 1536,
+      routingModel: "gemini-3.8-flash",
+      analyticsModel: "gemini-2.5-pro",
     }),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -1187,6 +1191,33 @@ export const userSavedViews = pgTable(
 export const savedViews = userSavedViews;
 
 // ============================================================================
+// 8d. AI USAGE LOGS (TOKEN-LOGGING & MODELL-METRIKEN)
+// ============================================================================
+
+export const aiUsageLogs = pgTable(
+  "ai_usage_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<"gemini" | "openai" | "ollama" | string>().notNull(),
+    model: text("model").notNull(),
+    taskType: text("task_type").$type<"ROUTING" | "ANALYTICS" | "RAG_SYNTHESIS" | string>().notNull(),
+    promptTokens: integer("prompt_tokens").notNull().default(0),
+    completionTokens: integer("completion_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    latencyMs: integer("latency_ms").notNull().default(0),
+    estimatedCostEur: numeric("estimated_cost_eur", { precision: 10, scale: 6 }).notNull().default("0"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_ai_usage_logs_tenant_created").on(table.tenantId, table.createdAt),
+    index("idx_ai_usage_logs_task_type").on(table.taskType),
+  ]
+);
+
+// ============================================================================
 // 9. DRIZZLE ORM RELATIONS (FÜR RELATIONAL QUERIES `db.query.*`)
 // ============================================================================
 
@@ -1211,6 +1242,7 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
   orderStatusAuditLogs: many(orderStatusAuditLogs),
   sapSyncQueue: many(sapSyncQueue),
   savedViews: many(userSavedViews),
+  aiUsageLogs: many(aiUsageLogs),
 }));
 
 export const areasRelations = relations(areas, ({ one, many }) => ({
@@ -1674,6 +1706,13 @@ export const sapSyncQueueRelations = relations(sapSyncQueue, ({ one }) => ({
   }),
 }));
 
+export const aiUsageLogsRelations = relations(aiUsageLogs, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [aiUsageLogs.tenantId],
+    references: [tenants.id],
+  }),
+}));
+
 export const assets = equipments;
 export const assetsRelations = equipmentsRelations;
 
@@ -1703,6 +1742,8 @@ export type OrderStatusAuditLog = typeof orderStatusAuditLogs.$inferSelect;
 export type NewOrderStatusAuditLog = typeof orderStatusAuditLogs.$inferInsert;
 export type SapSyncQueueItem = typeof sapSyncQueue.$inferSelect;
 export type NewSapSyncQueueItem = typeof sapSyncQueue.$inferInsert;
+export type AiUsageLog = typeof aiUsageLogs.$inferSelect;
+export type NewAiUsageLog = typeof aiUsageLogs.$inferInsert;
 
 // ============================================================================
 // 10. DRIZZLE-ZOD SCHEMAS FÜR KERNTABELLEN & OPTIONALE/NULLABLE FELDER
@@ -1897,3 +1938,6 @@ export const insertSapSyncQueueSchema = createInsertSchema(sapSyncQueue, {
   errorMessage: (schema) => schema.nullable().optional(),
   processedAt: (schema) => schema.nullable().optional(),
 });
+
+export const selectAiUsageLogSchema = createSelectSchema(aiUsageLogs);
+export const insertAiUsageLogSchema = createInsertSchema(aiUsageLogs);

@@ -1,1 +1,13 @@
-{"version":"7","dialect":"postgresql","entries":[]}
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792735699882,
+      "tag": "0000_jazzy_molten_man",
+      "breakpoints": true
+    }
+  ]
+}

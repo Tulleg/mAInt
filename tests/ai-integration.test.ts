@@ -15,7 +15,17 @@ import {
   OllamaConnectionError,
   PGVECTOR_DIMENSIONS,
   OLLAMA_DEFAULT_BASE_URL,
+  getLlmModelForTask,
+  resolveLlmModelForTask,
+  extractTokenUsage,
+  estimateLlmCost,
+  logAiUsageAsync,
+  createVercelAiUsageInterceptor,
+  withAiUsageLogging,
+  DEFAULT_ROUTING_MODEL,
+  DEFAULT_ANALYTICS_MODEL,
 } from "../src/lib/ai/provider";
+import { aiUsageLogs } from "../src/db/schema";
 import { analyzeFaultInput } from "../src/lib/ai/fault-copilot";
 import { executeAnalyticsPrompt } from "../src/lib/ai/analytics-agent";
 import { getTenantPredictiveOverview } from "../src/lib/ai/predictive";
@@ -446,7 +456,7 @@ describe("5. Gemini Cloud Provider Konfiguration, Verschlüsselung & Test-Action
     expect(maskApiKey("")).toBe("");
   });
 
-  it("should default Gemini provider to gemini-2.5-pro and text-embedding-004", async () => {
+  it("should default Gemini provider to gemini-1.5-flash and text-embedding-004 with 768 dimensions", async () => {
     const prevModel = process.env.GEMINI_MODEL;
     const prevEmbedding = process.env.GEMINI_EMBEDDING_MODEL;
     delete process.env.GEMINI_MODEL;
@@ -454,18 +464,67 @@ describe("5. Gemini Cloud Provider Konfiguration, Verschlüsselung & Test-Action
 
     try {
       const gemini = new GeminiProvider({ apiKey: "test-gemini-key" });
-      expect((gemini as any).chatModel).toBe("gemini-2.5-pro");
+      expect((gemini as any).chatModel).toBe("gemini-1.5-flash");
       expect((gemini as any).embeddingModel).toBe("text-embedding-004");
 
       const tenantConfig = await getTenantAiConfig();
       if (tenantConfig.provider === "GEMINI") {
-        expect(tenantConfig.chatModel).toBe("gemini-2.5-pro");
+        expect(tenantConfig.chatModel).toBe("gemini-1.5-flash");
         expect(tenantConfig.embeddingModel).toBe("text-embedding-004");
+        expect(tenantConfig.embeddingDimensions).toBe(768);
       }
     } finally {
       if (prevModel) process.env.GEMINI_MODEL = prevModel;
       if (prevEmbedding) process.env.GEMINI_EMBEDDING_MODEL = prevEmbedding;
     }
+  });
+
+  it("should support dynamic model configuration for chat/routing and embeddings across providers", async () => {
+    const gemini = createAiProvider({
+      provider: "GEMINI",
+      chatModel: "gemini-2.5-flash",
+      embeddingModel: "text-embedding-004",
+      embeddingDimensions: 768,
+    });
+    expect((gemini as any).chatModel).toBe("gemini-2.5-flash");
+    expect((gemini as any).embeddingModel).toBe("text-embedding-004");
+
+    const openai = createAiProvider({
+      provider: "OPENAI",
+      chatModel: "gpt-4o-mini",
+      embeddingModel: "text-embedding-3-large",
+    });
+    expect((openai as any).chatModel).toBe("gpt-4o-mini");
+    expect((openai as any).embeddingModel).toBe("text-embedding-3-large");
+
+    const ollama = createAiProvider({
+      provider: "OLLAMA",
+      chatModel: "qwen2.5:32b",
+      embeddingModel: "bge-m3",
+    });
+    expect((ollama as any).chatModel).toBe("qwen2.5:32b");
+    expect((ollama as any).embeddingModel).toBe("bge-m3");
+  });
+
+  it("should ensure text-embedding-004 (768-dim) is cleanly mapped to the pgvector schema (1536-dim)", async () => {
+    const gemini = new GeminiProvider({
+      apiKey: "test-key",
+      embeddingModel: "text-embedding-004",
+      embeddingDimensions: 768,
+    });
+
+    // 1. Raw-Embedding liefert native 768 Dimensionen
+    const raw768 = await gemini.createRawEmbedding("Störung an der Hydraulikpresse");
+    expect(raw768.length).toBe(768);
+
+    // 2. createEmbedding mappt für das pgvector-Schema sauber auf 1536 Dimensionen
+    const pgvectorEmbedding = await gemini.createEmbedding("Störung an der Hydraulikpresse");
+    expect(pgvectorEmbedding.length).toBe(PGVECTOR_DIMENSIONS);
+    expect(pgvectorEmbedding.length).toBe(1536);
+
+    // Vektor ist L2-normalisiert
+    const norm = Math.sqrt(pgvectorEmbedding.reduce((sum, v) => sum + v * v, 0));
+    expect(norm).toBeCloseTo(1.0, 4);
   });
 
   it("should return meaningful error 'API-Schlüssel ungültig oder abgelaufen' when API key is missing or invalid", async () => {
@@ -477,37 +536,46 @@ describe("5. Gemini Cloud Provider Konfiguration, Verschlüsselung & Test-Action
     expect(res1.success).toBe(false);
     expect(res1.error).toBe("API-Schlüssel ungültig oder abgelaufen");
     expect(res1.status).toBe("Offline");
+    expect(res1.model).toBe("gemini-1.5-flash");
 
     // 2. Offensichtlich ungültiger Dummy-Key
     const res2 = await testAiProviderConnectionAction({
       provider: "GEMINI",
       apiKey: "invalid_key_123",
+      chatModel: "gemini-2.5-pro",
     });
     expect(res2.success).toBe(false);
     expect(res2.error).toBe("API-Schlüssel ungültig oder abgelaufen");
     expect(res2.status).toBe("Offline");
+    expect(res2.model).toBe("gemini-2.5-pro");
 
     // 3. Aufruf mit String-Signatur
     const res3 = await testAiProviderConnectionAction("GEMINI", "invalid");
     expect(res3.success).toBe(false);
     expect(res3.error).toBe("API-Schlüssel ungültig oder abgelaufen");
+    expect(res3.model).toBe("gemini-1.5-flash");
   });
 
-  it("should return success: true, latencyMs and status: Online when ping succeeds", async () => {
+  it("should return success: true, latencyMs and model when ping succeeds", async () => {
     const originalFetch = global.fetch;
 
     try {
-      // Mocken eines erfolgreichen schlanken Pings gegen Google Gemini /models
+      // Mocken eines erfolgreichen schlanken Pings gegen Google Gemini
       global.fetch = async (url: any, init?: any) => {
         const urlStr = String(url);
-        if (urlStr.includes("generativelanguage.googleapis.com") || urlStr.includes("/models")) {
+        if (
+          urlStr.includes("generativelanguage.googleapis.com") ||
+          urlStr.includes("/models") ||
+          urlStr.includes("/chat/completions")
+        ) {
           return {
             ok: true,
             status: 200,
             json: async () => ({
-              models: [{ name: "models/gemini-2.5-pro" }],
+              models: [{ name: "models/gemini-1.5-flash" }],
+              choices: [{ message: { content: "pong" } }],
             }),
-            text: async () => JSON.stringify({ models: [] }),
+            text: async () => JSON.stringify({ choices: [{ message: { content: "pong" } }] }),
           } as any;
         }
         return originalFetch(url, init);
@@ -516,13 +584,24 @@ describe("5. Gemini Cloud Provider Konfiguration, Verschlüsselung & Test-Action
       const res = await testAiProviderConnectionAction({
         provider: "GEMINI",
         apiKey: "AIzaSyValidDummyKeyForTestingPurposes12345",
+        chatModel: "gemini-1.5-flash",
       });
 
       expect(res.success).toBe(true);
       expect(typeof res.latencyMs).toBe("number");
       expect(res.latencyMs).toBeGreaterThanOrEqual(0);
       expect(res.status).toBe("Online");
+      expect(res.model).toBe("gemini-1.5-flash");
       expect(res.message).toContain("erfolgreich");
+
+      // Test mit dynamisch übergebenem Modell
+      const resCustom = await testAiProviderConnectionAction({
+        provider: "GEMINI",
+        apiKey: "AIzaSyValidDummyKeyForTestingPurposes12345",
+        chatModel: "gemini-2.0-flash",
+      });
+      expect(resCustom.success).toBe(true);
+      expect(resCustom.model).toBe("gemini-2.0-flash");
     } finally {
       global.fetch = originalFetch;
     }
@@ -560,6 +639,254 @@ describe("5. Gemini Cloud Provider Konfiguration, Verschlüsselung & Test-Action
       expect(res.success).toBe(false);
       expect(res.error).toBe("API-Schlüssel ungültig oder abgelaufen");
       expect(res.status).toBe("Offline");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});
+
+describe("6. Aufgabenbezogene Modellwahl (getLlmModelForTask) & Token Usage Logging", () => {
+  it("should return default routingModel 'gemini-3.8-flash' for intent classification and fault capturing", async () => {
+    // 1. Standard-Aufruf ohne Overrides
+    const modelRouting = await getLlmModelForTask("routing");
+    expect(modelRouting).toBe(DEFAULT_ROUTING_MODEL);
+    expect(modelRouting).toBe("gemini-3.8-flash");
+
+    // 2. Synonymer Task für Absichtserkennung
+    const modelIntent = await getLlmModelForTask("intent");
+    expect(modelIntent).toBe("gemini-3.8-flash");
+
+    // 3. Task für Störungserfassung
+    const modelFault = await getLlmModelForTask("fault-recording");
+    expect(modelFault).toBe("gemini-3.8-flash");
+
+    const modelCopilot = await getLlmModelForTask("copilot");
+    expect(modelCopilot).toBe("gemini-3.8-flash");
+  });
+
+  it("should return default analyticsModel 'gemini-2.5-pro' for Text-to-SQL and diagrams", async () => {
+    // 1. Standard-Aufruf für Analytics
+    const modelAnalytics = await getLlmModelForTask("analytics");
+    expect(modelAnalytics).toBe(DEFAULT_ANALYTICS_MODEL);
+    expect(modelAnalytics).toBe("gemini-2.5-pro");
+
+    // 2. Text-to-SQL
+    const modelSql = await getLlmModelForTask("text-to-sql");
+    expect(modelSql).toBe("gemini-2.5-pro");
+
+    // 3. Diagramme / Charts
+    const modelChart = await getLlmModelForTask("chart");
+    expect(modelChart).toBe("gemini-2.5-pro");
+
+    const modelDiagram = await getLlmModelForTask("diagram");
+    expect(modelDiagram).toBe("gemini-2.5-pro");
+  });
+
+  it("should allow configured model names (e.g. gemini-2.5-flash for routing or freetext for analytics)", async () => {
+    // Konfigurationsobjekt mit Stufen-Modellen
+    const customConfig = {
+      routingModel: "gemini-2.5-flash",
+      analyticsModel: "gemini-1.5-pro-experimental-custom",
+    };
+
+    const routingResolved = await getLlmModelForTask("routing", customConfig);
+    expect(routingResolved).toBe("gemini-2.5-flash");
+
+    const analyticsResolved = await getLlmModelForTask("analytics", customConfig);
+    expect(analyticsResolved).toBe("gemini-1.5-pro-experimental-custom");
+
+    // Synchroner Resolver
+    expect(resolveLlmModelForTask("fault-recording", customConfig)).toBe("gemini-2.5-flash");
+    expect(resolveLlmModelForTask("text-to-sql", customConfig)).toBe("gemini-1.5-pro-experimental-custom");
+  });
+
+  it("should support environment variable overrides for routing and analytics models", async () => {
+    const prevRouting = process.env.GEMINI_ROUTING_MODEL;
+    const prevAnalytics = process.env.AI_ANALYTICS_MODEL;
+
+    try {
+      process.env.GEMINI_ROUTING_MODEL = "gemini-2.5-flash";
+      process.env.AI_ANALYTICS_MODEL = "gemini-2.5-pro-tuned";
+
+      const routing = await getLlmModelForTask("routing");
+      expect(routing).toBe("gemini-2.5-flash");
+
+      const analytics = await getLlmModelForTask("analytics");
+      expect(analytics).toBe("gemini-2.5-pro-tuned");
+    } finally {
+      if (prevRouting !== undefined) process.env.GEMINI_ROUTING_MODEL = prevRouting;
+      else delete process.env.GEMINI_ROUTING_MODEL;
+
+      if (prevAnalytics !== undefined) process.env.AI_ANALYTICS_MODEL = prevAnalytics;
+      else delete process.env.AI_ANALYTICS_MODEL;
+    }
+  });
+
+  it("should seamlessly integrate task models into getAiProvider", async () => {
+    const routingProvider = (await getAiProvider(undefined, {
+      task: "routing",
+      provider: "GEMINI",
+    })) as GeminiProvider;
+    expect(routingProvider.getChatModel()).toBe("gemini-3.8-flash");
+
+    const analyticsProvider = (await getAiProvider(undefined, {
+      task: "analytics",
+      provider: "GEMINI",
+    })) as GeminiProvider;
+    expect(analyticsProvider.getChatModel()).toBe("gemini-2.5-pro");
+  });
+
+  it("should extract token usage from OpenAI, Gemini REST, Vercel AI SDK and Ollama formats", () => {
+    // 1. OpenAI REST Format
+    const openaiRaw = {
+      usage: { prompt_tokens: 120, completion_tokens: 45, total_tokens: 165 },
+    };
+    const openaiUsage = extractTokenUsage(openaiRaw);
+    expect(openaiUsage.promptTokens).toBe(120);
+    expect(openaiUsage.completionTokens).toBe(45);
+    expect(openaiUsage.totalTokens).toBe(165);
+
+    // 2. Gemini native REST Format (usageMetadata)
+    const geminiRaw = {
+      usageMetadata: { promptTokenCount: 150, candidatesTokenCount: 75, totalTokenCount: 225 },
+    };
+    const geminiUsage = extractTokenUsage(geminiRaw);
+    expect(geminiUsage.promptTokens).toBe(150);
+    expect(geminiUsage.completionTokens).toBe(75);
+    expect(geminiUsage.totalTokens).toBe(225);
+
+    // 3. Vercel AI SDK Format
+    const vercelRaw = {
+      usage: { promptTokens: 80, completionTokens: 40, totalTokens: 120 },
+    };
+    const vercelUsage = extractTokenUsage(vercelRaw);
+    expect(vercelUsage.promptTokens).toBe(80);
+    expect(vercelUsage.completionTokens).toBe(40);
+    expect(vercelUsage.totalTokens).toBe(120);
+
+    // 4. Ollama Format
+    const ollamaRaw = {
+      prompt_eval_count: 55,
+      eval_count: 22,
+    };
+    const ollamaUsage = extractTokenUsage(ollamaRaw);
+    expect(ollamaUsage.promptTokens).toBe(55);
+    expect(ollamaUsage.completionTokens).toBe(22);
+    expect(ollamaUsage.totalTokens).toBe(77);
+
+    // 5. Leeres / Null-Objekt
+    const emptyUsage = extractTokenUsage(null);
+    expect(emptyUsage.promptTokens).toBe(0);
+    expect(emptyUsage.completionTokens).toBe(0);
+    expect(emptyUsage.totalTokens).toBe(0);
+  });
+
+  it("should calculate estimated dollar costs accurately based on model tiers", () => {
+    // Flash-Modell
+    const flashCost = estimateLlmCost("gemini-3.8-flash", 10000, 2000);
+    expect(Number(flashCost)).toBeGreaterThan(0);
+    expect(Number(flashCost)).toBeCloseTo(0.00135, 4);
+
+    // Pro-Modell
+    const proCost = estimateLlmCost("gemini-2.5-pro", 10000, 2000);
+    expect(Number(proCost)).toBeGreaterThan(Number(flashCost));
+    expect(Number(proCost)).toBeCloseTo(0.0225, 4);
+
+    // Lokales Modell
+    const localCost = estimateLlmCost("ollama/llama3", 50000, 10000);
+    expect(localCost).toBe("0.000000");
+  });
+
+  it("should execute non-blocking usage logging in logAiUsageAsync without throwing", async () => {
+    // Führe non-blocking Call aus
+    await expect(
+      logAiUsageAsync({
+        tenantId: "a0000000-0000-0000-0000-000000000001",
+        provider: "GEMINI",
+        model: "gemini-3.8-flash",
+        task: "routing",
+        usage: { promptTokens: 120, completionTokens: 45, totalTokens: 165 },
+        durationMs: 310,
+        metadata: { source: "vitest-test-run" },
+      })
+    ).resolves.not.toThrow();
+  });
+
+  it("should support withAiUsageLogging interceptor wrapper for generic API calls", async () => {
+    let callCount = 0;
+    const wrappedResult = await withAiUsageLogging(
+      {
+        tenantId: "a0000000-0000-0000-0000-000000000001",
+        provider: "GEMINI",
+        model: "gemini-2.5-pro",
+        task: "analytics",
+      },
+      async () => {
+        callCount++;
+        return {
+          content: "SQL Query executed successfully",
+          usage: { prompt_tokens: 300, completion_tokens: 50, total_tokens: 350 },
+        };
+      }
+    );
+
+    expect(callCount).toBe(1);
+    expect(wrappedResult.content).toBe("SQL Query executed successfully");
+  });
+
+  it("should support createVercelAiUsageInterceptor for Vercel AI SDK lifecycle hooks", async () => {
+    const interceptor = createVercelAiUsageInterceptor({
+      tenantId: "a0000000-0000-0000-0000-000000000001",
+      provider: "GEMINI",
+      model: "gemini-3.8-flash",
+      task: "routing",
+    });
+
+    await expect(
+      interceptor({
+        usage: { promptTokens: 42, completionTokens: 18, totalTokens: 60 },
+        text: '{"intent": "QUERY_ORDERS"}',
+      })
+    ).resolves.not.toThrow();
+  });
+
+  it("should intercept and log usage automatically during GeminiProvider.createChatCompletion", async () => {
+    const originalFetch = global.fetch;
+
+    try {
+      let interceptedBody: any = null;
+      global.fetch = async (url: any, init?: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes("chat/completions")) {
+          if (init?.body) {
+            interceptedBody = JSON.parse(init.body);
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [{ message: { content: "Antwort von Gemini mit Token-Logging" } }],
+              usage: { prompt_tokens: 65, completion_tokens: 15, total_tokens: 80 },
+            }),
+          } as any;
+        }
+        return originalFetch(url, init);
+      };
+
+      const gemini = new GeminiProvider({
+        apiKey: "AIzaValidDummyKey12345",
+        task: "routing",
+        tenantId: "a0000000-0000-0000-0000-000000000001",
+      });
+
+      const response = await gemini.createChatCompletion(
+        [{ role: "user", content: "Notfallmeldung an Pumpe 3" }],
+        { task: "routing" }
+      );
+
+      expect(response).toBe("Antwort von Gemini mit Token-Logging");
+      // Sicherstellen, dass das routingModel "gemini-3.8-flash" gewählt wurde
+      expect(interceptedBody.model).toBe("gemini-3.8-flash");
     } finally {
       global.fetch = originalFetch;
     }

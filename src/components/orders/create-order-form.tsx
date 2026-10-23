@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Sparkles,
   AlertTriangle,
@@ -115,10 +115,32 @@ export function CreateOrderForm({
   defaultUserId = "user-demo-meister",
 }: CreateOrderFormProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<"ai_prompt" | "manual">("ai_prompt");
   const [isPending, startTransition] = useTransition();
 
   const [availableEquipments, setAvailableEquipments] = useState<EquipmentOption[]>(equipments);
+
+  // Deep-Link URL Parameter synchronisieren
+  useEffect(() => {
+    if (!searchParams) return;
+    const qTitle = searchParams.get("title");
+    const qDesc = searchParams.get("description");
+    const qEqId = searchParams.get("equipmentId");
+    const qPrio = searchParams.get("priority");
+    const qDamage = searchParams.get("damageCode");
+
+    if (qTitle) setTitle(qTitle);
+    if (qDesc) setDescription(qDesc);
+    if (qEqId) setSelectedEquipmentId(qEqId);
+    if (qPrio && ["1_EMERGENCY", "2_HIGH", "3_MEDIUM", "4_LOW"].includes(qPrio)) {
+      setPriority(qPrio as any);
+    }
+    if (qDamage) setDamageCode(qDamage);
+    if (qTitle || qDesc || qEqId) {
+      setActiveTab("manual");
+    }
+  }, [searchParams]);
 
   // Synchronisation mit IndexedDB & Background Sync Engine
   useEffect(() => {

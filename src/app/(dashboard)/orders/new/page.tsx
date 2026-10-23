@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { db } from "@/db";
 import { tenants, equipments, users } from "@/db/schema";
 import { CreateOrderForm, EquipmentOption } from "@/components/orders/create-order-form";
@@ -120,11 +121,13 @@ export default async function NewOrderPage() {
       </div>
 
       {/* Das interaktive Dual-Mode Störungsformular */}
-      <CreateOrderForm
-        tenantId={tenantId}
-        equipments={equipmentList}
-        defaultUserId={defaultUserId}
-      />
+      <Suspense fallback={<div className="p-8 text-slate-400 text-sm">Lade Erfassungsdialog...</div>}>
+        <CreateOrderForm
+          tenantId={tenantId}
+          equipments={equipmentList}
+          defaultUserId={defaultUserId}
+        />
+      </Suspense>
     </div>
   );
 }

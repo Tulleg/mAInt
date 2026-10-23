@@ -99,6 +99,8 @@ export default async function AdminSettingsPage() {
         provider: "OLLAMA",
         endpointUrl: "http://ollama-service.internal:11434/v1",
         chatModel: "llama3.3:70b-instruct",
+        routingModel: "gemini-3.8-flash",
+        analyticsModel: "gemini-2.5-pro",
         embeddingModel: "nomic-embed-text",
         embeddingDimensions: 768,
       },

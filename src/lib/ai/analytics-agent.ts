@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getAiProvider } from "./provider";
+import { getAiProvider, getLlmModelForTask } from "./provider";
 
 export interface AnalyticsChatMessage {
   role: "user" | "assistant";
@@ -199,7 +199,8 @@ export async function executeAnalyticsPrompt(
   }
 
   // 5. Reguläre SQL/AI Analyse
-  const ai = await getAiProvider(tenantId);
+  const analyticsModel = await getLlmModelForTask("analytics", tenantId);
+  const ai = await getAiProvider(tenantId, { task: "analytics", model: analyticsModel });
 
   const schemaDescription = `
 Du hast Zugriff auf eine PostgreSQL-Datenbank mit folgenden relevanten Tabellen und Spalten:
@@ -250,7 +251,7 @@ Andernfalls antworte im Standard-JSON:
         { role: "system", content: schemaDescription },
         { role: "user", content: agentPrompt },
       ],
-      { jsonMode: true, temperature: 0.0 }
+      { jsonMode: true, temperature: 0.0, model: analyticsModel, task: "analytics", tenantId }
     );
     parsedPlan = JSON.parse(rawPlan);
 
@@ -425,7 +426,7 @@ Daten: ${JSON.stringify(queryRows.slice(0, 10))}
         { role: "system", content: "Du bist Instandhaltungs-Controller. Antworte in 1-2 präzisen Sätzen auf Deutsch." },
         { role: "user", content: insightPrompt },
       ],
-      { temperature: 0.2, maxTokens: 150 }
+      { temperature: 0.2, maxTokens: 150, model: analyticsModel, task: "analytics", tenantId }
     );
   } catch {
     const totalCount = queryRows.length;

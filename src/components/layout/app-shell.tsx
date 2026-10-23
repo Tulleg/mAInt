@@ -29,10 +29,6 @@ import {
   Plus,
   ChevronDown,
 } from "lucide-react";
-import {
-  OfflineSyncStatusIndicator,
-  SimulateOfflineToggle,
-} from "@/components/layout/offline-sync-indicator";
 import { Badge } from "@/components/ui/badge";
 import { CurrentUserRbacInfo } from "@/lib/rbac";
 import { useWorkspace } from "./workspace-context";
@@ -208,7 +204,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="hidden md:flex flex-col w-[260px] bg-white border-r border-slate-200 shrink-0 sticky top-0 h-screen z-30 justify-between text-slate-800">
         {/* Brand / Logo Header */}
         <div className="h-16 flex items-center justify-between px-5 border-b border-slate-200 shrink-0">
-          <Link href="/" className="flex items-center gap-3 group">
+          <Link href="/" onClick={() => clearActiveView()} className="flex items-center gap-3 group cursor-pointer" title="Zurück zur Workspace-Startseite (Reset)">
             <div className="h-9 w-9 rounded-[10px] bg-blue-50 border border-blue-100 flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
               <span className="h-3 w-3 rounded-full bg-blue-600" />
             </div>
@@ -396,11 +392,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Menu className="h-5 w-5" />
             </button>
 
-            <div className="md:hidden flex items-center gap-2">
+            <Link
+              href="/"
+              onClick={() => clearActiveView()}
+              className="md:hidden flex items-center gap-2 cursor-pointer"
+              title="Zurück zur Workspace-Startseite (Reset)"
+            >
               <span className="font-bold text-slate-900 tracking-tight text-sm">
                 MaintAI
               </span>
-            </div>
+            </Link>
 
             <div className="hidden md:flex items-center gap-2">
               <span className="text-base font-bold text-slate-900 tracking-tight">
@@ -417,24 +418,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
-          {/* Topbar Actions: Online, SAP PM, Profil */}
+          {/* Topbar Actions: Online, Profil */}
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Status-Pill: Online */}
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold shadow-xs">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
               <span>Online</span>
-            </div>
-
-            {/* SAP-Pill: Verbunden */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold shadow-xs">
-              <span className="h-2 w-2 rounded-full bg-indigo-500" />
-              <span className="hidden sm:inline">SAP PM: Verbunden</span>
-              <span className="sm:hidden">SAP</span>
-            </div>
-
-            {/* Offline-Sync Dexie Indikator */}
-            <div className="hidden xl:block">
-              <OfflineSyncStatusIndicator />
             </div>
 
             {/* Profil Badge mit interaktivem Dropdown */}
@@ -523,12 +512,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="md:hidden fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex">
             <div className="w-4/5 max-w-sm bg-white border-r border-slate-200 p-4 flex flex-col h-full shadow-2xl text-slate-800">
               <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
-                <div className="flex items-center gap-2">
+                <Link
+                  href="/"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    clearActiveView();
+                  }}
+                  className="flex items-center gap-2 cursor-pointer"
+                  title="Zurück zur Workspace-Startseite (Reset)"
+                >
                   <div className="h-7 w-7 rounded bg-blue-50 border border-blue-200 flex items-center justify-center">
                     <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
                   </div>
                   <span className="font-bold text-slate-900 text-sm">MaintAI Menü</span>
-                </div>
+                </Link>
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(false)}
@@ -566,10 +563,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           selectView(view);
                           setMobileMenuOpen(false);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-50 text-left"
+                        className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-50 text-left"
                       >
-                        <Star className="h-3.5 w-3.5 text-blue-600 fill-blue-600" />
-                        <span className="truncate">{view.name}</span>
+                        <div className="flex items-center gap-2 truncate">
+                          <Star className="h-3.5 w-3.5 text-blue-600 fill-blue-600 shrink-0" />
+                          <span className="truncate">{view.name}</span>
+                        </div>
+                        {(view.refreshInterval ?? 0) > 0 && (
+                          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                            {view.refreshInterval}s
+                          </span>
+                        )}
                       </button>
                     ))}
                     {savedViews.length === 0 && (
