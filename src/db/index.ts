@@ -9,7 +9,9 @@ const globalForDb = globalThis as unknown as {
 export const pool =
   globalForDb.pool ??
   new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString:
+      process.env.DATABASE_URL ||
+      "postgresql://postgres:postgrespassword@localhost:5432/maintai",
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
@@ -21,3 +23,4 @@ if (process.env.NODE_ENV !== "production") {
 
 export const db = drizzle(pool, { schema });
 export type Database = typeof db;
+export * from "./schema";

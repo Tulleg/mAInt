@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq, and } from "drizzle-orm";
-import { db } from "@/lib/db";
+import { db } from "@/db";
 import {
   maintenanceOrders,
   orderStatusAuditLogs,
@@ -9,7 +9,9 @@ import {
   spareParts,
   inspectionTemplates,
   workflowStatuses,
-} from "@/lib/db/schema";
+  orderTypes,
+  users,
+} from "@/db/schema";
 import { transitionOrderStatus } from "@/lib/workflow-engine";
 import { getSapConnector } from "@/lib/sap/sap-connector";
 
@@ -124,6 +126,8 @@ export async function POST(req: NextRequest) {
       });
 
       if (!existing) {
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
         // Initiale Auftragsstatus ID laden
         const initialStatus = await db.query.workflowStatuses.findFirst({
           where: and(
@@ -132,24 +136,58 @@ export async function POST(req: NextRequest) {
           ),
         });
 
+        let statusIdToUse = initialStatus ? initialStatus.id : payload.currentStatusId;
+        if (!statusIdToUse || !uuidRegex.test(statusIdToUse)) {
+          const anyStatus = await db.query.workflowStatuses.findFirst({
+            where: eq(workflowStatuses.tenantId, tenantId),
+          });
+          if (anyStatus) statusIdToUse = anyStatus.id;
+        }
+
+        // Auftragstyp laden
+        let orderTypeIdToUse = payload.orderTypeId;
+        if (!orderTypeIdToUse || !uuidRegex.test(orderTypeIdToUse)) {
+          const defaultType = await db.query.orderTypes.findFirst({
+            where: and(
+              eq(orderTypes.tenantId, tenantId),
+              eq(orderTypes.code, "PM01")
+            ),
+          });
+          const anyType = defaultType || (await db.query.orderTypes.findFirst({
+            where: eq(orderTypes.tenantId, tenantId),
+          }));
+          if (anyType) orderTypeIdToUse = anyType.id;
+        }
+
+        // Benutzer laden
+        let userIdToUse = userId;
+        if (!userIdToUse || !uuidRegex.test(userIdToUse)) {
+          const defaultUser = await db.query.users.findFirst({
+            where: eq(users.tenantId, tenantId),
+          });
+          if (defaultUser) userIdToUse = defaultUser.id;
+        }
+
         const [createdOrder] = await db
           .insert(maintenanceOrders)
           .values({
             tenantId,
             orderNumber: payload.orderNumber || `MO-OFF-${Date.now().toString().slice(-6)}`,
-            orderTypeId: payload.orderTypeId,
-            currentStatusId: initialStatus ? initialStatus.id : payload.currentStatusId,
+            orderTypeId: orderTypeIdToUse,
+            currentStatusId: statusIdToUse,
             priority: payload.priority || "3_MEDIUM",
             title: payload.title,
             description: payload.description,
-            equipmentId: payload.equipmentId || null,
-            functionalLocationId: payload.functionalLocationId || null,
-            inspectionTemplateId: payload.inspectionTemplateId || null,
-            reportedByUserId: userId,
-            assignedToUserId: payload.assignedToUserId || null,
+            equipmentId: payload.equipmentId && uuidRegex.test(payload.equipmentId) ? payload.equipmentId : null,
+            functionalLocationId: payload.functionalLocationId && uuidRegex.test(payload.functionalLocationId) ? payload.functionalLocationId : null,
+            inspectionTemplateId: payload.inspectionTemplateId && uuidRegex.test(payload.inspectionTemplateId) ? payload.inspectionTemplateId : null,
+            reportedByUserId: userIdToUse,
+            assignedToUserId: payload.assignedToUserId && uuidRegex.test(payload.assignedToUserId) ? payload.assignedToUserId : null,
             clientCreatedOfflineId: clientMutationId,
             scheduledStartAt: payload.scheduledStartAt ? new Date(payload.scheduledStartAt) : null,
             scheduledEndAt: payload.scheduledEndAt ? new Date(payload.scheduledEndAt) : null,
+            plannedDurationMinutes: payload.plannedDurationMinutes || 60,
+            downtimeMinutes: payload.downtimeMinutes || 0,
           })
           .returning();
 
@@ -209,6 +247,28 @@ export async function POST(req: NextRequest) {
           actualDurationMinutes: payload.actualDurationMinutes || undefined,
           updatedAt: new Date(),
         })
+        .where(eq(maintenanceOrders.id, targetEntityId));
+
+      return NextResponse.json({ success: true, processedMutationId: clientMutationId });
+    }
+
+    // 5. RÜCKMELDUNG / ZEITERFASSUNG / ABSCHLUSS
+    if (entityType === "TIME_CONFIRMATION" || (entityType === "ORDER" && action === "UPDATE")) {
+      const updateData: Record<string, any> = {
+        updatedAt: new Date(),
+      };
+      if (payload.actualDurationMinutes !== undefined) updateData.actualDurationMinutes = payload.actualDurationMinutes;
+      if (payload.actualStartAt) updateData.actualStartAt = new Date(payload.actualStartAt);
+      if (payload.actualEndAt) updateData.actualEndAt = new Date(payload.actualEndAt);
+      if (payload.damageCode !== undefined) updateData.damageCode = payload.damageCode;
+      if (payload.causeCode !== undefined) updateData.causeCode = payload.causeCode;
+      if (payload.rootCauseDescription !== undefined) updateData.rootCauseDescription = payload.rootCauseDescription;
+      if (payload.resolutionSummary !== undefined) updateData.resolutionSummary = payload.resolutionSummary;
+      if (payload.currentStatusId) updateData.currentStatusId = payload.currentStatusId;
+
+      await db
+        .update(maintenanceOrders)
+        .set(updateData)
         .where(eq(maintenanceOrders.id, targetEntityId));
 
       return NextResponse.json({ success: true, processedMutationId: clientMutationId });

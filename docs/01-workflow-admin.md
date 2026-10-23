@@ -1,6 +1,6 @@
 # ⚙️ 1. Workflow- & Auftragsarten-Konfiguration (Admin)
 
-Pfad in der Anwendung: `Administration > Workflows & Auftragsarten` (`/admin/workflows`)
+Pfad in der Anwendung: `Administration > Workflows & Auftragsarten` (`/admin/workflows` oder `/workflows`)
 
 ## Ziel & Konzept
 In **MaintAI** sind Auftragsarten, Status und Statusübergänge nicht im Quellcode fest verdrahtet. Jeder Mandant kann eigene Betriebs- und Freigabeprozesse abbilden, ohne dass ein System-Update oder Neustart erforderlich ist.
@@ -35,3 +35,14 @@ Für sicherheitskritische Übergänge (z. B. *Technisch Abschließen*) greifen a
 2. **Ursachen-Pflicht (Root Cause):** Erzwingt die Erfassung eines Fehler- und Schadenscodes vor dem Abschluss.
 3. **Ist-Zeiterfassung:** Blockiert den Abschluss ohne Eingabe der geleisteten Arbeitsminuten.
 4. **SAP-Sync-Trigger:** Löst beim Erreichen des Zielstatus (z. B. `TABG`) automatisiert die OData-Meldung an SAP aus.
+
+---
+
+## 3. Navigationsstandards & Absprünge
+
+Gemäß den **Design- & Navigationsrichtlinien** (`docs/design-rules.md`) gilt für die Workflow-Administration:
+- **Einstieg:** Aus der Seitenleiste unter `SYSTEM > Workflow-Matrix` (`/workflows`) oder über die Administrationsübersicht (`/admin`).
+- **Standardisierter Zurück-Button:**
+  - Jede Unterkonfigurationsmaske besitzt zwingend einen Breadcrumb-Rücksprung mit dem Lucide-Icon `ArrowLeft` (`<ArrowLeft className="w-4 h-4 text-cyan-400" />`).
+  - Mindest-Touch-Fläche: **`min-h-[44px]`** für zuverlässige Bedienung auf Werkstatt- und Leitstand-Tablets.
+  - Zielpfad: `Zurück zur System-Administration` (`/admin`).

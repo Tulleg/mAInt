@@ -16,6 +16,8 @@ import {
   AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+import { z } from "zod";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 // ============================================================================
 // 1. ENUMS & CUSTOM TYPES
@@ -32,6 +34,7 @@ export const sapSyncQueueStatusEnum = pgEnum("sap_sync_queue_status", [
   "PENDING",
   "PROCESSING",
   "COMPLETED",
+  "PROCESSED",
   "FAILED",
 ]);
 
@@ -39,6 +42,7 @@ export const sapSyncStatusEnum = pgEnum("sap_sync_status", [
   "NOT_APPLICABLE", // Standalone-Modus
   "PENDING",        // Wartet auf SAP-Outbox-Übertragung
   "SYNCED",         // Erfolgreich mit SAP PM / MM synchronisiert
+  "PROCESSED",      // Erfolgreich übertragen / verarbeitet
   "FAILED",         // SAP BAPI / OData Fehler (Retry erforderlich)
   "CONFLICT",       // Datenkonflikt zwischen lokalem Stand und SAP
 ]);
@@ -55,6 +59,13 @@ export const assetStatusEnum = pgEnum("asset_status", [
   "BREAKDOWN",
   "DECOMMISSIONED",
 ]);
+
+export const assetSourceEnum = pgEnum("asset_source", [
+  "SAP",
+  "MANUAL",
+]);
+
+export const hierarchySourceEnum = assetSourceEnum;
 
 export const orderPriorityEnum = pgEnum("order_priority", [
   "1_EMERGENCY", // Sofort / Stillstand
@@ -86,6 +97,18 @@ export const sapSyncModeEnum = pgEnum("sap_sync_mode", [
   "ODATA_V4",
   "RFC_BAPI",
   "REST_MIDDLEWARE",
+]);
+
+export const authProviderEnum = pgEnum("auth_provider", [
+  "LOCAL",
+  "SSO",
+  "AZURE_AD",
+]);
+
+export const orderEscalationLevelEnum = pgEnum("order_escalation_level", [
+  "LEVEL_1",
+  "LEVEL_2",
+  "LEVEL_3",
 ]);
 
 // ============================================================================
@@ -123,6 +146,9 @@ export interface InspectionExecutionChecklistResult {
   templateVersion: number;
   completedAt?: string;
   completedByUserId?: string;
+  signature?: string;
+  signatureName?: string;
+  signedAt?: string;
   values: Record<
     string,
     {
@@ -141,7 +167,23 @@ export interface WorkflowGuardCondition {
   requireActualDurationFilled?: boolean;
   requireDigitalSignature?: boolean;
   requireAllSparePartsSynced?: boolean;
+  requireDamageCode?: boolean;
   customRuleExpression?: string;
+}
+
+export interface SavedViewFilterPayload {
+  areaId?: string;
+  functionalLocationId?: string;
+  equipmentId?: string;
+  assemblyId?: string;
+  status?: string[];
+  priority?: string[];
+  search?: string;
+  orderType?: string;
+  assignedToMe?: boolean;
+  reportedByMe?: boolean;
+  sapSyncStatus?: string[];
+  [key: string]: unknown;
 }
 
 // ============================================================================
@@ -169,6 +211,7 @@ export const tenants = pgTable(
       chatModel: string;
       embeddingModel: string;
       embeddingDimensions: 768 | 1536;
+      apiKey?: string;
     }>().default({
       provider: "OPENAI",
       chatModel: "gpt-4o",
@@ -183,6 +226,33 @@ export const tenants = pgTable(
 );
 
 // ============================================================================
+// 3b. BEREICHE (AREAS / PLANTS) - 1. STUFE DER ANLAGENSTRUKTUR
+// ============================================================================
+
+export const areas = pgTable(
+  "areas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 50 }).notNull(), // z.B. "AREA-01", "FERTIGUNG-1"
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    isActive: boolean("is_active").default(true).notNull(),
+    source: assetSourceEnum("source").default("MANUAL").notNull(),
+    sapId: varchar("sap_id", { length: 100 }),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_areas_tenant_code").on(table.tenantId, table.code),
+    index("idx_areas_sap_id").on(table.tenantId, table.sapId),
+  ]
+);
+
+// ============================================================================
 // 4. RBAC: USERS, ROLES & PERMISSIONS
 // ============================================================================
 
@@ -194,9 +264,15 @@ export const users = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
     email: varchar("email", { length: 255 }).notNull(),
-    passwordHash: text("password_hash").notNull(),
+    passwordHash: text("password_hash"),
     firstName: varchar("first_name", { length: 100 }).notNull(),
     lastName: varchar("last_name", { length: 100 }).notNull(),
+    authProvider: authProviderEnum("auth_provider").default("LOCAL").notNull(),
+    externalAdId: varchar("external_ad_id", { length: 255 }),
+    department: varchar("department", { length: 120 }),
+    assignedAreaId: uuid("assigned_area_id").references((): AnyPgColumn => areas.id, {
+      onDelete: "set null",
+    }),
     personnelNr: varchar("personnel_nr", { length: 50 }), // SAP PERNR
     workCenterCode: varchar("work_center_code", { length: 50 }), // SAP ARBPL (z.B. ELEK-01)
     qualificationMatrix: jsonb("qualification_matrix").$type<string[]>().default([]), // z.B. ["Ex-Schutz", "Hochspannung", "Schweißen"]
@@ -208,6 +284,7 @@ export const users = pgTable(
   (table) => [
     uniqueIndex("idx_users_tenant_email").on(table.tenantId, table.email),
     index("idx_users_personnel_nr").on(table.tenantId, table.personnelNr),
+    index("idx_users_assigned_area").on(table.assignedAreaId),
   ]
 );
 
@@ -289,7 +366,8 @@ export const functionalLocations = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    parentLocationId: uuid("parent_location_id").references(
+    areaId: uuid("area_id").references(() => areas.id, { onDelete: "set null" }),
+    parentFunctionalLocationId: uuid("parent_functional_location_id").references(
       (): AnyPgColumn => functionalLocations.id,
       { onDelete: "restrict" }
     ),
@@ -298,6 +376,9 @@ export const functionalLocations = pgTable(
     description: text("description"),
     costCenter: varchar("cost_center", { length: 50 }), // SAP KOSTL
     plantSection: varchar("plant_section", { length: 50 }), // Betriebsbereich
+    source: assetSourceEnum("source").default("MANUAL").notNull(),
+    sapId: varchar("sap_id", { length: 100 }),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     // SAP-Integrationsfelder (optional für Standalone-Modus)
     sapTplnr: varchar("sap_tplnr", { length: 40 }), // SAP Technischer Platz (TPLNR)
     sapSyncStatus: sapSyncStatusEnum("sap_sync_status")
@@ -311,7 +392,9 @@ export const functionalLocations = pgTable(
   },
   (table) => [
     uniqueIndex("idx_floc_tenant_code").on(table.tenantId, table.code),
-    index("idx_floc_parent").on(table.parentLocationId),
+    index("idx_floc_area").on(table.areaId),
+    index("idx_floc_parent").on(table.parentFunctionalLocationId),
+    index("idx_floc_sap_id").on(table.tenantId, table.sapId),
     index("idx_floc_sap_tplnr").on(table.tenantId, table.sapTplnr),
   ]
 );
@@ -325,12 +408,15 @@ export const equipments = pgTable(
       .references(() => tenants.id, { onDelete: "cascade" }),
     functionalLocationId: uuid("functional_location_id").references(
       () => functionalLocations.id,
-      { onDelete: "set null" }
+      {
+        onDelete: "set null",
+      }
     ),
     parentEquipmentId: uuid("parent_equipment_id").references(
       (): AnyPgColumn => equipments.id,
       { onDelete: "restrict" }
     ),
+    isAssembly: boolean("is_assembly").default(false).notNull(), // Kennzeichnung als Baugruppe / Funktionseinheit
     equipmentNumber: varchar("equipment_number", { length: 64 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     description: text("description"),
@@ -347,6 +433,9 @@ export const equipments = pgTable(
       .default("0.00")
       .notNull(),
     technicalSpecs: jsonb("technical_specs").$type<Record<string, string | number>>().default({}),
+    source: assetSourceEnum("source").default("MANUAL").notNull(),
+    sapId: varchar("sap_id", { length: 100 }),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     // SAP PM Felder (optional)
     sapEquipmentNr: varchar("sap_equipment_nr", { length: 36 }), // SAP EQUNR (18-stellig alphanumerisch)
     sapSyncStatus: sapSyncStatusEnum("sap_sync_status")
@@ -363,7 +452,39 @@ export const equipments = pgTable(
       table.equipmentNumber
     ),
     index("idx_equipments_floc").on(table.functionalLocationId),
+    index("idx_equipments_sap_id").on(table.tenantId, table.sapId),
     index("idx_equipments_sap_nr").on(table.tenantId, table.sapEquipmentNr),
+  ]
+);
+
+// ============================================================================
+// 5b. BAUGRUPPEN / FUNKTIONSEINHEITEN (ASSEMBLIES) - 4. STUFE DER ANLAGENSTRUKTUR
+// ============================================================================
+
+export const assemblies = pgTable(
+  "assemblies",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    equipmentId: uuid("equipment_id")
+      .notNull()
+      .references(() => equipments.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 64 }).notNull(), // z.B. "BG-KU-AXIS4"
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    source: assetSourceEnum("source").default("MANUAL").notNull(),
+    sapId: varchar("sap_id", { length: 100 }),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_assemblies_tenant_code").on(table.tenantId, table.code),
+    index("idx_assemblies_equipment").on(table.equipmentId),
+    index("idx_assemblies_sap_id").on(table.tenantId, table.sapId),
   ]
 );
 
@@ -441,32 +562,36 @@ export const orderTypes = pgTable(
   (table) => [uniqueIndex("idx_order_types_tenant_code").on(table.tenantId, table.code)]
 );
 
-export const workflowStatuses = pgTable(
-  "workflow_statuses",
+export const orderStatuses = pgTable(
+  "order_statuses",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    code: varchar("code", { length: 50 }).notNull(), // z.B. "CREATED", "RELEASED", "IN_WORK", "TECH_COMPLETED", "CLOSED"
-    name: varchar("name", { length: 120 }).notNull(),
+    code: text("code").notNull(), // z. B. 'ERFASST', 'FREIGEGEBEN', 'IN_ARBEIT', 'PAUSIERT', 'TABG', 'ABGS'
+    name: text("name").notNull(), // z. B. 'Technisch abgeschlossen'
     description: text("description"),
-    category: workflowStatusCategoryEnum("category").notNull(),
+    category: text("category").notNull(), // 'INITIAL' | 'IN_PROGRESS' | 'TECHNICAL_COMPLETE' | 'CLOSED'
     sapSystemStatusCode: varchar("sap_system_status_code", { length: 10 }), // z.B. I0001 (EROF), I0002 (FREI), I0045 (TABG)
     sapUserStatusCode: varchar("sap_user_status_code", { length: 10 }), // SAP Anwenderstatus (E0001 etc.)
-    colorHex: varchar("color_hex", { length: 7 }).default("#64748B").notNull(),
+    color: text("color").default("sky").notNull(), // z. B. 'emerald', 'sky', 'amber'
+    colorHex: varchar("color_hex", { length: 20 }).default("#64748B").notNull(),
     isInitialStatus: boolean("is_initial_status").default(false).notNull(),
     isTerminalStatus: boolean("is_terminal_status").default(false).notNull(),
     locksOrderEditing: boolean("locks_order_editing").default(false).notNull(),
     triggersSapCompletion: boolean("triggers_sap_completion").default(false).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("idx_workflow_statuses_tenant_code").on(table.tenantId, table.code),
+    uniqueIndex("idx_order_statuses_tenant_code").on(table.tenantId, table.code),
   ]
 );
+
+export const workflowStatuses = orderStatuses;
 
 export const workflowTransitions = pgTable(
   "workflow_transitions",
@@ -480,19 +605,22 @@ export const workflowTransitions = pgTable(
       .references(() => orderTypes.id, { onDelete: "cascade" }),
     fromStatusId: uuid("from_status_id")
       .notNull()
-      .references(() => workflowStatuses.id, { onDelete: "cascade" }),
+      .references(() => orderStatuses.id, { onDelete: "cascade" }),
     toStatusId: uuid("to_status_id")
       .notNull()
-      .references(() => workflowStatuses.id, { onDelete: "cascade" }),
+      .references(() => orderStatuses.id, { onDelete: "cascade" }),
     /**
-     * Erforderliche Rolle für diesen Statusübergang.
-     * Falls NULL, darf jeder authentifizierte Benutzer mit allgemeiner Auftrags-Bearbeitungsberechtigung den Übergang ausführen.
+     * Erforderliche Rolle für diesen Statusübergang: z. B. 'COORDINATOR', 'TECHNICIAN', 'ADMIN' oder 'ALL'
+     * Falls NULL oder 'ALL', darf jeder authentifizierte Benutzer den Übergang ausführen.
      */
-    requiredRoleId: uuid("required_role_id").references(() => roles.id, {
-      onDelete: "restrict",
-    }),
-    actionName: varchar("action_name", { length: 120 }).notNull(), // Button-Beschriftung im UI, z.B. "Auftrag freigeben", "Technisch abschließen (TABG)"
+    requiredRoleId: text("required_role_id"),
+    actionName: varchar("action_name", { length: 120 }).default("Status wechseln").notNull(), // Button-Beschriftung im UI
     description: text("description"),
+    requireChecklist: boolean("require_checklist").default(false).notNull(),
+    requireTimeEntry: boolean("require_time_entry").default(false).notNull(),
+    requireRootCause: boolean("require_root_cause").default(false).notNull(),
+    requireSignature: boolean("require_signature").default(false).notNull(),
+    triggerSapSync: boolean("trigger_sap_sync").default(false).notNull(),
     guardConditions: jsonb("guard_conditions")
       .$type<WorkflowGuardCondition>()
       .default({})
@@ -624,6 +752,9 @@ export const maintenancePlanItems = pgTable(
       () => functionalLocations.id,
       { onDelete: "restrict" }
     ),
+    assemblyId: uuid("assembly_id").references((): AnyPgColumn => assemblies.id, {
+      onDelete: "set null",
+    }),
     inspectionTemplateId: uuid("inspection_template_id").references(
       () => inspectionTemplates.id,
       { onDelete: "set null" }
@@ -653,6 +784,52 @@ export const maintenancePlanItems = pgTable(
 );
 
 // ============================================================================
+// 7b. SCHADENSCODE-KATALOGE (CATALOGS & DAMAGE CODES)
+// ============================================================================
+
+export const damageCatalogs = pgTable(
+  "damage_catalogs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 32 }).notNull(), // z.B. "MECH", "HYDR", "ELEK", "PNEU"
+    name: varchar("name", { length: 120 }).notNull(), // z.B. "Mechanische Schäden"
+    description: text("description"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_damage_catalogs_tenant_code").on(table.tenantId, table.code),
+  ]
+);
+
+export const damageCodes = pgTable(
+  "damage_codes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    catalogId: uuid("catalog_id")
+      .notNull()
+      .references(() => damageCatalogs.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 64 }).notNull(), // z.B. "LAGER_DEFEKT", "LECKAGE", "SENSOR_AUSFALL"
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_damage_codes_tenant_code").on(table.tenantId, table.code),
+    index("idx_damage_codes_catalog").on(table.catalogId),
+  ]
+);
+
+// ============================================================================
 // 8. INSTANDHALTUNGSAUFTRÄGE, ERSATZTEILBUCHUNGEN & PGVECTOR EMBEDDINGS
 // ============================================================================
 
@@ -671,11 +848,17 @@ export const maintenanceOrders = pgTable(
       .notNull()
       .references(() => workflowStatuses.id, { onDelete: "restrict" }),
     priority: orderPriorityEnum("priority").default("3_MEDIUM").notNull(),
+    escalationLevel: orderEscalationLevelEnum("escalation_level")
+      .default("LEVEL_1")
+      .notNull(),
     title: varchar("title", { length: 255 }).notNull(),
     description: text("description").notNull(),
     // Störungsanalyse & Rückmeldung (relevant für KI-Wissensbasis & SAP-Kataloge)
     symptomDescription: text("symptom_description"),
     damageCode: varchar("damage_code", { length: 32 }), // SAP Schadensbild (FEGRP/FECOD)
+    damageCodeId: uuid("damage_code_id").references((): AnyPgColumn => damageCodes.id, {
+      onDelete: "set null",
+    }),
     rootCauseDescription: text("root_cause_description"),
     causeCode: varchar("cause_code", { length: 32 }), // SAP Schadensursache (URGRP/URCOD)
     resolutionSummary: text("resolution_summary"),
@@ -687,6 +870,9 @@ export const maintenanceOrders = pgTable(
       () => functionalLocations.id,
       { onDelete: "restrict" }
     ),
+    assemblyId: uuid("assembly_id").references((): AnyPgColumn => assemblies.id, {
+      onDelete: "set null",
+    }),
     maintenancePlanId: uuid("maintenance_plan_id").references(
       () => maintenancePlans.id,
       { onDelete: "set null" }
@@ -714,6 +900,8 @@ export const maintenanceOrders = pgTable(
     scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
     actualStartAt: timestamp("actual_start_at", { withTimezone: true }),
     actualEndAt: timestamp("actual_end_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
     plannedDurationMinutes: integer("planned_duration_minutes")
       .default(60)
       .notNull(),
@@ -750,6 +938,9 @@ export const maintenanceOrders = pgTable(
       table.assignedToUserId
     ),
     index("idx_maint_orders_sap_aufnr").on(table.tenantId, table.sapOrderNr),
+    index("idx_maint_orders_damage_code_id").on(table.tenantId, table.damageCodeId),
+    index("idx_maint_orders_assembly_id").on(table.tenantId, table.assemblyId),
+    index("idx_maint_orders_escalation").on(table.tenantId, table.escalationLevel),
   ]
 );
 
@@ -760,28 +951,38 @@ export const orderStatusAuditLogs = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    maintenanceOrderId: uuid("maintenance_order_id")
-      .notNull()
-      .references(() => maintenanceOrders.id, { onDelete: "cascade" }),
+    maintenanceOrderId: uuid("maintenance_order_id").references(
+      () => maintenanceOrders.id,
+      { onDelete: "cascade" }
+    ),
+    orderId: uuid("order_id").references(() => maintenanceOrders.id, {
+      onDelete: "cascade",
+    }),
     transitionId: uuid("transition_id").references(
       () => workflowTransitions.id,
       { onDelete: "set null" }
     ),
-    fromStatusId: uuid("from_status_id").references(() => workflowStatuses.id, {
+    fromStatusId: uuid("from_status_id").references(() => orderStatuses.id, {
       onDelete: "restrict",
     }),
     toStatusId: uuid("to_status_id")
       .notNull()
-      .references(() => workflowStatuses.id, { onDelete: "restrict" }),
-    changedByUserId: uuid("changed_by_user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+      .references(() => orderStatuses.id, { onDelete: "restrict" }),
+    changedByUserId: uuid("changed_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    userId: uuid("user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
     comment: text("comment"),
+    notes: text("notes"),
     recordedOfflineAt: timestamp("recorded_offline_at", { withTimezone: true }),
+    changedAt: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index("idx_order_status_audit_order").on(table.maintenanceOrderId),
+    index("idx_order_status_audit_order_id").on(table.orderId),
   ]
 );
 
@@ -838,6 +1039,34 @@ export const orderSparePartBookings = pgTable(
     ),
   ]
 );
+
+export const orderTimeEntries = pgTable(
+  "order_time_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => maintenanceOrders.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    durationMinutes: integer("duration_minutes").default(0).notNull(),
+    workDescription: text("work_description"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_order_time_entries_order").on(table.orderId),
+    index("idx_order_time_entries_user").on(table.userId),
+    index("idx_order_time_entries_tenant").on(table.tenantId),
+  ]
+);
+
+export const orderTimeTrackings = orderTimeEntries;
 
 /**
  * Semantisches Gedächtnis (RAG / Ähnlichkeitssuche über abgeschlossene Instandhaltungsaufträge).
@@ -925,21 +1154,72 @@ export const sapSyncQueue = pgTable(
 );
 
 // ============================================================================
+// 8c. USER SAVED VIEWS (FAVORITEN & DYNAMISCHE ANSICHTEN)
+// ============================================================================
+
+export const userSavedViews = pgTable(
+  "user_saved_views",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    icon: text("icon").default("star"),
+    intent: text("intent").default("ORDERS_QUERY").notNull(),
+    filterPayload: jsonb("filter_payload").$type<SavedViewFilterPayload>().default({}),
+    refreshInterval: integer("refresh_interval").default(0),
+    displayDensity: text("display_density").$type<"compact" | "standard" | "detailed">().default("standard"),
+    position: integer("position").default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_user_saved_views_user").on(table.userId),
+    index("idx_user_saved_views_tenant").on(table.tenantId),
+    uniqueIndex("idx_user_saved_views_user_name").on(table.userId, table.name),
+  ]
+);
+
+export const savedViews = userSavedViews;
+
+// ============================================================================
 // 9. DRIZZLE ORM RELATIONS (FÜR RELATIONAL QUERIES `db.query.*`)
 // ============================================================================
 
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   users: many(users),
   roles: many(roles),
+  areas: many(areas),
   functionalLocations: many(functionalLocations),
   equipments: many(equipments),
+  assemblies: many(assemblies),
   spareParts: many(spareParts),
+  damageCatalogs: many(damageCatalogs),
+  damageCodes: many(damageCodes),
   orderTypes: many(orderTypes),
+  orderStatuses: many(orderStatuses),
   workflowStatuses: many(workflowStatuses),
   workflowTransitions: many(workflowTransitions),
   maintenanceOrders: many(maintenanceOrders),
   maintenancePlans: many(maintenancePlans),
   inspectionTemplates: many(inspectionTemplates),
+  orderTimeEntries: many(orderTimeEntries),
+  orderStatusAuditLogs: many(orderStatusAuditLogs),
+  sapSyncQueue: many(sapSyncQueue),
+  savedViews: many(userSavedViews),
+}));
+
+export const areasRelations = relations(areas, ({ one, many }) => ({
+  tenant: one(tenants, {
+    fields: [areas.tenantId],
+    references: [tenants.id],
+  }),
+  functionalLocations: many(functionalLocations),
+  users: many(users),
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -947,10 +1227,17 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     fields: [users.tenantId],
     references: [tenants.id],
   }),
+  assignedArea: one(areas, {
+    fields: [users.assignedAreaId],
+    references: [areas.id],
+  }),
   userRoles: many(userRoles),
   reportedOrders: many(maintenanceOrders, { relationName: "reportedByUser" }),
   assignedOrders: many(maintenanceOrders, { relationName: "assignedToUser" }),
   sparePartBookings: many(orderSparePartBookings),
+  timeEntries: many(orderTimeEntries),
+  statusAuditLogs: many(orderStatusAuditLogs),
+  savedViews: many(userSavedViews),
 }));
 
 export const rolesRelations = relations(roles, ({ one, many }) => ({
@@ -999,8 +1286,12 @@ export const functionalLocationsRelations = relations(
       fields: [functionalLocations.tenantId],
       references: [tenants.id],
     }),
+    area: one(areas, {
+      fields: [functionalLocations.areaId],
+      references: [areas.id],
+    }),
     parentLocation: one(functionalLocations, {
-      fields: [functionalLocations.parentLocationId],
+      fields: [functionalLocations.parentFunctionalLocationId],
       references: [functionalLocations.id],
       relationName: "flocHierarchy",
     }),
@@ -1030,9 +1321,22 @@ export const equipmentsRelations = relations(equipments, ({ one, many }) => ({
   subEquipments: many(equipments, {
     relationName: "equipmentHierarchy",
   }),
+  assemblies: many(assemblies),
   maintenanceOrders: many(maintenanceOrders),
   maintenancePlanItems: many(maintenancePlanItems),
   historyEmbeddings: many(orderHistoryEmbeddings),
+}));
+
+export const assembliesRelations = relations(assemblies, ({ one, many }) => ({
+  tenant: one(tenants, {
+    fields: [assemblies.tenantId],
+    references: [tenants.id],
+  }),
+  equipment: one(equipments, {
+    fields: [assemblies.equipmentId],
+    references: [equipments.id],
+  }),
+  maintenanceOrders: many(maintenanceOrders),
 }));
 
 export const sparePartsRelations = relations(spareParts, ({ one, many }) => ({
@@ -1053,11 +1357,11 @@ export const orderTypesRelations = relations(orderTypes, ({ one, many }) => ({
   maintenancePlans: many(maintenancePlans),
 }));
 
-export const workflowStatusesRelations = relations(
-  workflowStatuses,
+export const orderStatusesRelations = relations(
+  orderStatuses,
   ({ one, many }) => ({
     tenant: one(tenants, {
-      fields: [workflowStatuses.tenantId],
+      fields: [orderStatuses.tenantId],
       references: [tenants.id],
     }),
     outgoingTransitions: many(workflowTransitions, {
@@ -1067,8 +1371,16 @@ export const workflowStatusesRelations = relations(
       relationName: "transitionToStatus",
     }),
     maintenanceOrders: many(maintenanceOrders),
+    auditLogsFrom: many(orderStatusAuditLogs, {
+      relationName: "fromStatusAuditLogs",
+    }),
+    auditLogsTo: many(orderStatusAuditLogs, {
+      relationName: "toStatusAuditLogs",
+    }),
   })
 );
+
+export const workflowStatusesRelations = orderStatusesRelations;
 
 export const workflowTransitionsRelations = relations(
   workflowTransitions,
@@ -1161,6 +1473,26 @@ export const maintenancePlanItemsRelations = relations(
   })
 );
 
+export const damageCatalogsRelations = relations(damageCatalogs, ({ one, many }) => ({
+  tenant: one(tenants, {
+    fields: [damageCatalogs.tenantId],
+    references: [tenants.id],
+  }),
+  codes: many(damageCodes),
+}));
+
+export const damageCodesRelations = relations(damageCodes, ({ one, many }) => ({
+  tenant: one(tenants, {
+    fields: [damageCodes.tenantId],
+    references: [tenants.id],
+  }),
+  catalog: one(damageCatalogs, {
+    fields: [damageCodes.catalogId],
+    references: [damageCatalogs.id],
+  }),
+  maintenanceOrders: many(maintenanceOrders),
+}));
+
 export const maintenanceOrdersRelations = relations(
   maintenanceOrders,
   ({ one, many }) => ({
@@ -1176,6 +1508,10 @@ export const maintenanceOrdersRelations = relations(
       fields: [maintenanceOrders.currentStatusId],
       references: [workflowStatuses.id],
     }),
+    damageCodeCatalog: one(damageCodes, {
+      fields: [maintenanceOrders.damageCodeId],
+      references: [damageCodes.id],
+    }),
     equipment: one(equipments, {
       fields: [maintenanceOrders.equipmentId],
       references: [equipments.id],
@@ -1183,6 +1519,10 @@ export const maintenanceOrdersRelations = relations(
     functionalLocation: one(functionalLocations, {
       fields: [maintenanceOrders.functionalLocationId],
       references: [functionalLocations.id],
+    }),
+    assembly: one(assemblies, {
+      fields: [maintenanceOrders.assemblyId],
+      references: [assemblies.id],
     }),
     maintenancePlan: one(maintenancePlans, {
       fields: [maintenanceOrders.maintenancePlanId],
@@ -1207,8 +1547,27 @@ export const maintenanceOrdersRelations = relations(
       relationName: "assignedToUser",
     }),
     sparePartBookings: many(orderSparePartBookings),
+    timeEntries: many(orderTimeEntries),
     statusAuditLogs: many(orderStatusAuditLogs),
     historyEmbeddings: many(orderHistoryEmbeddings),
+  })
+);
+
+export const orderTimeEntriesRelations = relations(
+  orderTimeEntries,
+  ({ one }) => ({
+    tenant: one(tenants, {
+      fields: [orderTimeEntries.tenantId],
+      references: [tenants.id],
+    }),
+    order: one(maintenanceOrders, {
+      fields: [orderTimeEntries.orderId],
+      references: [maintenanceOrders.id],
+    }),
+    user: one(users, {
+      fields: [orderTimeEntries.userId],
+      references: [users.id],
+    }),
   })
 );
 
@@ -1251,3 +1610,290 @@ export const orderHistoryEmbeddingsRelations = relations(
     }),
   })
 );
+
+export const userSavedViewsRelations = relations(
+  userSavedViews,
+  ({ one }) => ({
+    tenant: one(tenants, {
+      fields: [userSavedViews.tenantId],
+      references: [tenants.id],
+    }),
+    user: one(users, {
+      fields: [userSavedViews.userId],
+      references: [users.id],
+    }),
+  })
+);
+
+export const savedViewsRelations = userSavedViewsRelations;
+
+export const orderStatusAuditLogsRelations = relations(
+  orderStatusAuditLogs,
+  ({ one }) => ({
+    tenant: one(tenants, {
+      fields: [orderStatusAuditLogs.tenantId],
+      references: [tenants.id],
+    }),
+    maintenanceOrder: one(maintenanceOrders, {
+      fields: [orderStatusAuditLogs.maintenanceOrderId],
+      references: [maintenanceOrders.id],
+    }),
+    order: one(maintenanceOrders, {
+      fields: [orderStatusAuditLogs.orderId],
+      references: [maintenanceOrders.id],
+    }),
+    transition: one(workflowTransitions, {
+      fields: [orderStatusAuditLogs.transitionId],
+      references: [workflowTransitions.id],
+    }),
+    fromStatus: one(orderStatuses, {
+      fields: [orderStatusAuditLogs.fromStatusId],
+      references: [orderStatuses.id],
+      relationName: "fromStatusAuditLogs",
+    }),
+    toStatus: one(orderStatuses, {
+      fields: [orderStatusAuditLogs.toStatusId],
+      references: [orderStatuses.id],
+      relationName: "toStatusAuditLogs",
+    }),
+    changedByUser: one(users, {
+      fields: [orderStatusAuditLogs.changedByUserId],
+      references: [users.id],
+    }),
+    user: one(users, {
+      fields: [orderStatusAuditLogs.userId],
+      references: [users.id],
+    }),
+  })
+);
+
+export const sapSyncQueueRelations = relations(sapSyncQueue, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [sapSyncQueue.tenantId],
+    references: [tenants.id],
+  }),
+}));
+
+export const assets = equipments;
+export const assetsRelations = equipmentsRelations;
+
+export type Area = typeof areas.$inferSelect;
+export type NewArea = typeof areas.$inferInsert;
+export type FunctionalLocation = typeof functionalLocations.$inferSelect;
+export type NewFunctionalLocation = typeof functionalLocations.$inferInsert;
+export type Equipment = typeof equipments.$inferSelect;
+export type NewEquipment = typeof equipments.$inferInsert;
+export type Asset = Equipment;
+export type NewAsset = NewEquipment;
+export type Assembly = typeof assemblies.$inferSelect;
+export type NewAssembly = typeof assemblies.$inferInsert;
+export type UserSavedView = typeof userSavedViews.$inferSelect;
+export type NewUserSavedView = typeof userSavedViews.$inferInsert;
+export type SavedView = UserSavedView;
+export type NewSavedView = NewUserSavedView;
+export type MaintenanceOrder = typeof maintenanceOrders.$inferSelect;
+export type NewMaintenanceOrder = typeof maintenanceOrders.$inferInsert;
+export type OrderStatus = typeof orderStatuses.$inferSelect;
+export type NewOrderStatus = typeof orderStatuses.$inferInsert;
+export type WorkflowStatus = OrderStatus;
+export type NewWorkflowStatus = NewOrderStatus;
+export type WorkflowTransition = typeof workflowTransitions.$inferSelect;
+export type NewWorkflowTransition = typeof workflowTransitions.$inferInsert;
+export type OrderStatusAuditLog = typeof orderStatusAuditLogs.$inferSelect;
+export type NewOrderStatusAuditLog = typeof orderStatusAuditLogs.$inferInsert;
+export type SapSyncQueueItem = typeof sapSyncQueue.$inferSelect;
+export type NewSapSyncQueueItem = typeof sapSyncQueue.$inferInsert;
+
+// ============================================================================
+// 10. DRIZZLE-ZOD SCHEMAS FÜR KERNTABELLEN & OPTIONALE/NULLABLE FELDER
+// ============================================================================
+
+export const selectEquipmentSchema = createSelectSchema(equipments, {
+  sapEquipmentNr: (schema) => schema.nullable().optional(),
+  sapId: (schema) => schema.nullable().optional(),
+  lastSyncedAt: (schema) => schema.nullable().optional(),
+  sapLastSyncedAt: (schema) => schema.nullable().optional(),
+  sapSyncError: (schema) => schema.nullable().optional(),
+  description: (schema) => schema.nullable().optional(),
+  manufacturer: (schema) => schema.nullable().optional(),
+  modelType: (schema) => schema.nullable().optional(),
+  serialNumber: (schema) => schema.nullable().optional(),
+  yearOfManufacture: (schema) => schema.nullable().optional(),
+  functionalLocationId: (schema) => schema.nullable().optional(),
+  parentEquipmentId: (schema) => schema.nullable().optional(),
+});
+
+export const insertEquipmentSchema = createInsertSchema(equipments, {
+  sapEquipmentNr: (schema) => schema.nullable().optional(),
+  sapId: (schema) => schema.nullable().optional(),
+  lastSyncedAt: (schema) => schema.nullable().optional(),
+  sapLastSyncedAt: (schema) => schema.nullable().optional(),
+  sapSyncError: (schema) => schema.nullable().optional(),
+  description: (schema) => schema.nullable().optional(),
+  manufacturer: (schema) => schema.nullable().optional(),
+  modelType: (schema) => schema.nullable().optional(),
+  serialNumber: (schema) => schema.nullable().optional(),
+  yearOfManufacture: (schema) => schema.nullable().optional(),
+  functionalLocationId: (schema) => schema.nullable().optional(),
+  parentEquipmentId: (schema) => schema.nullable().optional(),
+});
+
+export const selectAssetSchema = selectEquipmentSchema;
+export const insertAssetSchema = insertEquipmentSchema;
+
+export const selectMaintenanceOrderSchema = createSelectSchema(maintenanceOrders, {
+  actualStartAt: (schema) => schema.nullable().optional(),
+  actualEndAt: (schema) => schema.nullable().optional(),
+  startedAt: (schema) => schema.nullable().optional(),
+  completedAt: (schema) => schema.nullable().optional(),
+  scheduledStartAt: (schema) => schema.nullable().optional(),
+  scheduledEndAt: (schema) => schema.nullable().optional(),
+  actualDurationMinutes: (schema) => schema.nullable().optional(),
+  sapOrderNr: (schema) => schema.nullable().optional(),
+  sapNotificationNr: (schema) => schema.nullable().optional(),
+  sapLastSyncedAt: (schema) => schema.nullable().optional(),
+  sapSyncError: (schema) => schema.nullable().optional(),
+  symptomDescription: (schema) => schema.nullable().optional(),
+  damageCode: (schema) => schema.nullable().optional(),
+  damageCodeId: (schema) => schema.nullable().optional(),
+  rootCauseDescription: (schema) => schema.nullable().optional(),
+  causeCode: (schema) => schema.nullable().optional(),
+  resolutionSummary: (schema) => schema.nullable().optional(),
+  equipmentId: (schema) => schema.nullable().optional(),
+  functionalLocationId: (schema) => schema.nullable().optional(),
+  assemblyId: (schema) => schema.nullable().optional(),
+  maintenancePlanId: (schema) => schema.nullable().optional(),
+  maintenancePlanItemId: (schema) => schema.nullable().optional(),
+  inspectionTemplateId: (schema) => schema.nullable().optional(),
+  checklistResultsJson: (schema) => schema.nullable().optional(),
+  assignedToUserId: (schema) => schema.nullable().optional(),
+  clientCreatedOfflineId: (schema) => schema.nullable().optional(),
+  lastModifiedDeviceId: (schema) => schema.nullable().optional(),
+});
+
+export const insertMaintenanceOrderSchema = createInsertSchema(maintenanceOrders, {
+  actualStartAt: (schema) => schema.nullable().optional(),
+  actualEndAt: (schema) => schema.nullable().optional(),
+  startedAt: (schema) => schema.nullable().optional(),
+  completedAt: (schema) => schema.nullable().optional(),
+  scheduledStartAt: (schema) => schema.nullable().optional(),
+  scheduledEndAt: (schema) => schema.nullable().optional(),
+  actualDurationMinutes: (schema) => schema.nullable().optional(),
+  sapOrderNr: (schema) => schema.nullable().optional(),
+  sapNotificationNr: (schema) => schema.nullable().optional(),
+  sapLastSyncedAt: (schema) => schema.nullable().optional(),
+  sapSyncError: (schema) => schema.nullable().optional(),
+  symptomDescription: (schema) => schema.nullable().optional(),
+  damageCode: (schema) => schema.nullable().optional(),
+  damageCodeId: (schema) => schema.nullable().optional(),
+  rootCauseDescription: (schema) => schema.nullable().optional(),
+  causeCode: (schema) => schema.nullable().optional(),
+  resolutionSummary: (schema) => schema.nullable().optional(),
+  equipmentId: (schema) => schema.nullable().optional(),
+  functionalLocationId: (schema) => schema.nullable().optional(),
+  assemblyId: (schema) => schema.nullable().optional(),
+  maintenancePlanId: (schema) => schema.nullable().optional(),
+  maintenancePlanItemId: (schema) => schema.nullable().optional(),
+  inspectionTemplateId: (schema) => schema.nullable().optional(),
+  checklistResultsJson: (schema) => schema.nullable().optional(),
+  assignedToUserId: (schema) => schema.nullable().optional(),
+  clientCreatedOfflineId: (schema) => schema.nullable().optional(),
+  lastModifiedDeviceId: (schema) => schema.nullable().optional(),
+});
+
+export const selectOrderSchema = selectMaintenanceOrderSchema;
+export const insertOrderSchema = insertMaintenanceOrderSchema;
+
+export const selectUserSavedViewSchema = createSelectSchema(userSavedViews, {
+  icon: (schema) => schema.nullable().optional(),
+  filterPayload: (schema) => schema.nullable().optional(),
+  refreshInterval: (schema) => schema.nullable().optional(),
+  displayDensity: (schema) => schema.nullable().optional(),
+  position: (schema) => schema.nullable().optional(),
+});
+
+export const insertUserSavedViewSchema = createInsertSchema(userSavedViews, {
+  icon: (schema) => schema.nullable().optional(),
+  filterPayload: (schema) => schema.nullable().optional(),
+  refreshInterval: (schema) => schema.nullable().optional(),
+  displayDensity: (schema) => schema.nullable().optional(),
+  position: (schema) => schema.nullable().optional(),
+});
+
+export const selectSavedViewSchema = selectUserSavedViewSchema;
+export const insertSavedViewSchema = insertUserSavedViewSchema;
+
+export const selectFunctionalLocationSchema = createSelectSchema(functionalLocations, {
+  description: (schema) => schema.nullable().optional(),
+  sapTplnr: (schema) => schema.nullable().optional(),
+  parentFunctionalLocationId: (schema) => schema.nullable().optional(),
+});
+export const insertFunctionalLocationSchema = createInsertSchema(functionalLocations, {
+  description: (schema) => schema.nullable().optional(),
+  sapTplnr: (schema) => schema.nullable().optional(),
+  parentFunctionalLocationId: (schema) => schema.nullable().optional(),
+});
+
+export const selectAreaSchema = createSelectSchema(areas);
+export const insertAreaSchema = createInsertSchema(areas);
+
+export const selectAssemblySchema = createSelectSchema(assemblies);
+export const insertAssemblySchema = createInsertSchema(assemblies);
+
+export const selectSparePartSchema = createSelectSchema(spareParts);
+export const insertSparePartSchema = createInsertSchema(spareParts);
+
+export const selectOrderTimeEntrySchema = createSelectSchema(orderTimeEntries, {
+  startedAt: (schema) => schema.nullable().optional(),
+  endedAt: (schema) => schema.nullable().optional(),
+  workDescription: (schema) => schema.nullable().optional(),
+});
+export const insertOrderTimeEntrySchema = createInsertSchema(orderTimeEntries, {
+  startedAt: (schema) => schema.nullable().optional(),
+  endedAt: (schema) => schema.nullable().optional(),
+  workDescription: (schema) => schema.nullable().optional(),
+});
+
+export const selectOrderStatusSchema = createSelectSchema(orderStatuses);
+export const insertOrderStatusSchema = createInsertSchema(orderStatuses);
+export const selectWorkflowStatusSchema = selectOrderStatusSchema;
+export const insertWorkflowStatusSchema = insertOrderStatusSchema;
+
+export const selectWorkflowTransitionSchema = createSelectSchema(workflowTransitions);
+export const insertWorkflowTransitionSchema = createInsertSchema(workflowTransitions);
+
+export const selectOrderStatusAuditLogSchema = createSelectSchema(orderStatusAuditLogs, {
+  maintenanceOrderId: (schema) => schema.nullable().optional(),
+  orderId: (schema) => schema.nullable().optional(),
+  transitionId: (schema) => schema.nullable().optional(),
+  fromStatusId: (schema) => schema.nullable().optional(),
+  changedByUserId: (schema) => schema.nullable().optional(),
+  userId: (schema) => schema.nullable().optional(),
+  comment: (schema) => schema.nullable().optional(),
+  notes: (schema) => schema.nullable().optional(),
+  recordedOfflineAt: (schema) => schema.nullable().optional(),
+  changedAt: (schema) => schema.nullable().optional(),
+});
+export const insertOrderStatusAuditLogSchema = createInsertSchema(orderStatusAuditLogs, {
+  maintenanceOrderId: (schema) => schema.nullable().optional(),
+  orderId: (schema) => schema.nullable().optional(),
+  transitionId: (schema) => schema.nullable().optional(),
+  fromStatusId: (schema) => schema.nullable().optional(),
+  changedByUserId: (schema) => schema.nullable().optional(),
+  userId: (schema) => schema.nullable().optional(),
+  comment: (schema) => schema.nullable().optional(),
+  notes: (schema) => schema.nullable().optional(),
+  recordedOfflineAt: (schema) => schema.nullable().optional(),
+  changedAt: (schema) => schema.nullable().optional(),
+});
+
+export const selectSapSyncQueueSchema = createSelectSchema(sapSyncQueue, {
+  entityId: (schema) => schema.nullable().optional(),
+  errorMessage: (schema) => schema.nullable().optional(),
+  processedAt: (schema) => schema.nullable().optional(),
+});
+export const insertSapSyncQueueSchema = createInsertSchema(sapSyncQueue, {
+  entityId: (schema) => schema.nullable().optional(),
+  errorMessage: (schema) => schema.nullable().optional(),
+  processedAt: (schema) => schema.nullable().optional(),
+});

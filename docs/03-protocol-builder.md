@@ -1,6 +1,6 @@
-# 📋 2. Visueller Prüfprotokoll-Vorlagen-Editor
+# 📋 3. Visueller Prüfprotokoll-Vorlagen-Editor
 
-Pfad in der Anwendung: `Inspektionen > Protokoll-Vorlagen` (`/inspections`)
+Pfad in der Anwendung: `WARTUNG & PRÜFUNGEN > Protokoll-Vorlagen` (`/inspections`)
 
 ## Konzept
 Papierlose, rechtssichere Checklisten mit strukturierter Datenerfassung im JSON-Format (`InspectionTemplateSchema`).
@@ -32,3 +32,15 @@ Wird an einem Messwert- oder Prüffeld die Option **"Auto-Störungsauftrag erzeu
 Über die obere Umschaltleiste kann der Formular-Designer direkt in den **Live-Simulator** wechseln:
 - **Mobile Client (PWA):** Simuliert ein Smartphone/Tablet mit Canvas-Touch-Unterschrift.
 - **Desktop:** Standard-Formularansicht für Leitstand- und Werkstatt-Terminals.
+
+---
+
+## 4. Navigationsstandards & Absprünge
+
+Gemäß den **Design- & Navigationsrichtlinien** (`docs/design-rules.md`):
+- **Menü-Verankerung:** Unter `WARTUNG > Protokoll-Vorlagen` (`/inspections`) sowie aus dem Wartungs-Hub (`/maintenance`).
+- **Verknüpfung mit Aufträgen:**
+  - In der Auftragsdetailmaske (`/orders/[id]`) verweist die Sektion *Prüfprotokoll* direkt auf die zugewiesene Vorlage.
+  - Der Techniker füllt die Checkliste digital aus und springt nach Fertigstellung über den standardisierten **`ArrowLeft`**-Button (mindestens **44px** Touch-Höhe) fehlklickfrei zurück zur Auftragsbearbeitung (`/orders/[id]`).
+- **Editor-Rücksprung:**
+  - Innerhalb des Vorlagen-Designers führt der Zurück-Button links oben mit Lucide-Icon `ArrowLeft` verlässlich zurück zur Vorlagenübersicht (`/inspections`) bzw. zum Wartungs-Hub (`/maintenance`).

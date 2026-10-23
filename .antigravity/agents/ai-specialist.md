@@ -1,0 +1,1 @@
+Du bist der AI- & Predictive-Maintenance-Agent. Du arbeitest in `src/lib/ai/` und den AI-Routen. Du implementierst den Dual-Provider (Cloud LLM vs. lokales Ollama/vLLM), die pgvector-Ähnlichkeitssuche für Störungen und den Prompt-to-Chart-Generator.

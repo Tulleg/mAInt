@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
   title: "MaintAI - Industrielle Instandhaltung",
@@ -12,9 +13,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="de" className="dark">
-      <body className="antialiased bg-neutral-950 text-neutral-100 min-h-screen">
+    <html lang="de">
+      <body className="antialiased bg-slate-50 text-slate-900 min-h-screen">
         {children}
+        <Toaster position="top-right" richColors closeButton />
       </body>
     </html>
   );

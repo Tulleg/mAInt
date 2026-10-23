@@ -1,4 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  checkTransitionPermission,
+  assertTransitionPermission,
+  assertUserHasRole,
+  assertUserHasPermission,
+  RbacPermissionError,
+  ROLES,
+  PERMISSIONS,
+} from "../src/lib/rbac";
+import { db } from "../src/db";
 
 // Validierungs-Funktion für schreibgeschützte SQL-Queries
 export function validateAnalyticsSqlQuery(sqlQuery: string, tenantId: string): void {
@@ -82,5 +92,69 @@ describe("Security & Analytics SQL Guard Tests", () => {
     expect(() => {
       validateAnalyticsSqlQuery("SELECT * FROM maintenance_orders", tenantId);
     }).toThrow(/Sicherheitsverletzung/);
+  });
+});
+
+describe("RBAC & Security Guard Assertion Tests", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("should allow transition when no requiredRoleId is defined", async () => {
+    const res = await checkTransitionPermission("user-1", "tenant-1", null);
+    expect(res.allowed).toBe(true);
+
+    await expect(
+      assertTransitionPermission("user-1", "tenant-1", null, "Freie Aktion")
+    ).resolves.not.toThrow();
+  });
+
+  it("should reject assertion when user lacks required role", async () => {
+    vi.spyOn(db.query.userRoles, "findMany").mockResolvedValue([]);
+    vi.spyOn(db.query.userRoles, "findFirst").mockResolvedValue(undefined as any);
+
+    await expect(
+      assertUserHasRole("user-without-role", ROLES.MAINT_PLANNER, "tenant-1")
+    ).rejects.toThrow(RbacPermissionError);
+
+    await expect(
+      assertTransitionPermission(
+        "user-without-role",
+        "tenant-1",
+        "role-planner-id",
+        "Freigeben",
+        "Instandhaltungsplaner"
+      )
+    ).rejects.toThrow(/Fehlende Berechtigung.*Instandhaltungsplaner/);
+  });
+
+  it("should pass assertion when user has required role", async () => {
+    vi.spyOn(db.query.userRoles, "findFirst").mockResolvedValue({
+      userId: "user-with-role",
+      roleId: "role-planner-id",
+      role: { id: "role-planner-id", code: "MAINT_PLANNER", tenantId: "tenant-1" },
+    } as any);
+
+    vi.spyOn(db.query.userRoles, "findMany").mockResolvedValue([
+      {
+        userId: "user-with-role",
+        roleId: "role-planner-id",
+        role: { id: "role-planner-id", code: "MAINT_PLANNER", name: "Instandhaltungsplaner", tenantId: "tenant-1" },
+      } as any,
+    ]);
+
+    await expect(
+      assertUserHasRole("user-with-role", "role-planner-id", "tenant-1")
+    ).resolves.not.toThrow();
+
+    await expect(
+      assertTransitionPermission(
+        "user-with-role",
+        "tenant-1",
+        "role-planner-id",
+        "Freigeben",
+        "Instandhaltungsplaner"
+      )
+    ).resolves.not.toThrow();
   });
 });

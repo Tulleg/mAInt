@@ -1,5 +1,5 @@
 import Dexie, { Table } from "dexie";
-import { InspectionTemplateSchema } from "../db/schema";
+import { InspectionTemplateSchema } from "@/db/schema";
 
 export interface LocalMaintenanceOrder {
   id: string; // Lokale UUID oder Server-UUID

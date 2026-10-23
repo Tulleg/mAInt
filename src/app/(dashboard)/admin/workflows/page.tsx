@@ -1,15 +1,16 @@
-import { db } from "@/lib/db";
+import { db } from "@/db";
 import {
   tenants,
   orderTypes,
   workflowStatuses,
   roles,
   workflowTransitions,
-} from "@/lib/db/schema";
+} from "@/db/schema";
 import { WorkflowMatrixEditor } from "@/components/workflows/workflow-matrix-editor";
 import { eq } from "drizzle-orm";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { GitBranch, Shield, Zap, Server } from "lucide-react";
+import { BackButton } from "@/components/ui/back-button";
 
 export const metadata = {
   title: "Workflow & Berechtigungs-Matrix | MaintAI Admin",
@@ -17,7 +18,7 @@ export const metadata = {
 };
 
 export default async function WorkflowsAdminPage() {
-  let tenant = null;
+  let tenant: any = null;
   let existingRoles: any[] = [];
   let existingStatuses: any[] = [];
   let existingOrderTypes: any[] = [];
@@ -238,28 +239,31 @@ export default async function WorkflowsAdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 p-6 md:p-8 space-y-8">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-800 pb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
-            <GitBranch className="h-7 w-7 text-blue-500" />
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
+      {/* Header mit Zurück-Button */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-6 bg-white p-6 rounded-2xl shadow-sm">
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <BackButton fallbackUrl="/admin/settings" label="Zurück zur Administration" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
+            <GitBranch className="h-7 w-7 text-blue-600" />
             Auftragsarten & Workflow-Engine Konfigurator
           </h1>
-          <p className="text-sm text-neutral-400 mt-1">
+          <p className="text-sm text-slate-500 mt-1">
             Industrielle Prozesssteuerung: Konfiguriere Zustandsautomaten, rollenbasierte
             Berechtigungen (RBAC) und SAP-Synchronisationspunkte ohne Re-Deployment.
           </p>
         </div>
 
-        <div className="flex items-center gap-4 text-xs font-mono bg-neutral-900 border border-neutral-800 rounded-lg p-3">
+        <div className="flex items-center gap-4 text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl p-3">
           <div>
-            <span className="text-neutral-500 block">MANDANT / WERK:</span>
-            <span className="text-blue-400 font-semibold">{tenant.name}</span>
+            <span className="text-slate-400 block text-[10px]">MANDANT / WERK:</span>
+            <span className="text-blue-700 font-semibold">{tenant.name}</span>
           </div>
-          <div className="border-l border-neutral-800 pl-4">
-            <span className="text-neutral-500 block">SAP MODUS:</span>
-            <span className="text-emerald-400 font-semibold">{tenant.sapSyncMode}</span>
+          <div className="border-l border-slate-200 pl-4">
+            <span className="text-slate-400 block text-[10px]">SAP MODUS:</span>
+            <span className="text-emerald-700 font-semibold">{tenant.sapSyncMode}</span>
           </div>
         </div>
       </div>

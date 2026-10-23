@@ -1,9 +1,10 @@
-import { db } from "@/lib/db";
-import { tenants, equipments, users } from "@/lib/db/schema";
+import { db } from "@/db";
+import { tenants, equipments, users } from "@/db/schema";
 import { CreateOrderForm, EquipmentOption } from "@/components/orders/create-order-form";
 import { OfflineSyncStatusIndicator } from "@/components/layout/offline-sync-indicator";
-import { Wrench, ArrowLeft, AlertCircle } from "lucide-react";
+import { Wrench, ChevronRight, AlertCircle } from "lucide-react";
 import Link from "next/link";
+import { BackButton } from "@/components/ui/back-button";
 
 export const metadata = {
   title: "Neue Störung melden | MaintAI Leitstand",
@@ -88,24 +89,27 @@ export default async function NewOrderPage() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 p-6 md:p-8 space-y-6">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-8 space-y-6">
       {/* Header mit Breadcrumbs & Sync-Indikator */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-800 pb-5">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-neutral-400 mb-2">
-            <Link href="/planning" className="hover:text-blue-400 flex items-center gap-1 transition-colors">
-              <ArrowLeft className="w-3.5 h-3.5" />
-              Zurück zum Planungsboard
-            </Link>
-            <span>/</span>
-            <span className="text-neutral-200">Störung erfassen</span>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <BackButton fallbackUrl="/orders" label="Zurück" />
+            <div className="h-4 w-px bg-slate-800" />
+            <nav className="flex items-center gap-1.5 text-xs text-slate-400" aria-label="Breadcrumb">
+              <Link href="/" className="hover:text-slate-200 transition-colors">Workspace</Link>
+              <ChevronRight className="h-3 w-3 text-slate-600" />
+              <Link href="/orders" className="hover:text-slate-200 transition-colors">Aufträge & Störungen</Link>
+              <ChevronRight className="h-3 w-3 text-slate-600" />
+              <span className="text-cyan-400 font-medium">Neue Störung erfassen</span>
+            </nav>
           </div>
 
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
-            <Wrench className="h-7 w-7 text-blue-500" />
+          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3 pt-1">
+            <Wrench className="h-7 w-7 text-cyan-500" />
             Neue Störungsmeldung & Instandhaltungsmaßnahme
           </h1>
-          <p className="text-sm text-neutral-400 mt-1">
+          <p className="text-sm text-slate-400 mt-1">
             Erfasse Störungen wahlweise per KI-Prompt (mit automatischer Pflichtfeld-Rückfrage) oder manuell mit Copilot-Unterstützung.
           </p>
         </div>

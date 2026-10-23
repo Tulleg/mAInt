@@ -12,3 +12,6 @@ Ihr müsst diese Regeln bei JEDER Code-Änderung oder Implementierung einer neue
 
 ## 3. 🛡️ Kontinuierliches Sicherheits-Audit
 * **Regel:** Es darf kein Code vorgeschlagen werden, der typische Sicherheitslücken (z. B. OWASP Top 10) enthält. Jede Modifikation wird automatisch einer adversariellen Prüfung unterzogen.
+
+## 4. 🏛️ Softwarearchitekturdokumentation (Architecture Docs)
+* **Regel:** Sobald strukturelle, datenbankseitige, sicherheits- oder schnittstellentechnische Änderungen vorgenommen werden (z. B. Tabellen/Enums in `src/db/schema.ts`, neue Subsysteme/Services in `src/lib/`, neue SAP-Adapter, API-Routen, Rollen/Guards oder Infrastrukturänderungen), MUSS das zentrale Softwarearchitekturdokument `docs/software-architecture.md` im selben Arbeitsschritt aktualisiert und nachgeführt werden.

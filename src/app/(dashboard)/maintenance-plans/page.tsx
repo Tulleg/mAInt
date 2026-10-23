@@ -1,13 +1,14 @@
-import { db } from "@/lib/db";
+import { db } from "@/db";
 import {
   tenants,
   maintenancePlans,
   maintenancePlanItems,
   equipments,
+  functionalLocations,
   roles,
   inspectionTemplates,
   orderTypes,
-} from "@/lib/db/schema";
+} from "@/db/schema";
 import {
   MaintenancePlanBatchGrid,
   BatchPlanItemRow,
@@ -15,6 +16,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Calendar, Layers, Sliders, CheckSquare, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { BackButton } from "@/components/ui/back-button";
 
 export const metadata = {
   title: "Zyklische Wartungspläne & Batch-Grid | MaintAI",
@@ -55,9 +57,25 @@ export default async function MaintenancePlansPage() {
     });
 
     if (allEquipments.length === 0) {
+      let floc = await db.query.functionalLocations.findFirst({
+        where: eq(functionalLocations.tenantId, tenant.id),
+      });
+      if (!floc) {
+        const [newFloc] = await db
+          .insert(functionalLocations)
+          .values({
+            tenantId: tenant.id,
+            code: "WERK-1000-HALLE-01",
+            name: "Halle 1 · Fertigung",
+            source: "MANUAL",
+          })
+          .returning();
+        floc = newFloc;
+      }
       await db.insert(equipments).values([
         {
           tenantId: tenant.id,
+          functionalLocationId: floc.id,
           equipmentNumber: "EQ-10042",
           name: "Kreiselpumpe KSB Etanorm 050-200",
           manufacturer: "KSB",
@@ -65,6 +83,7 @@ export default async function MaintenancePlansPage() {
         },
         {
           tenantId: tenant.id,
+          functionalLocationId: floc.id,
           equipmentNumber: "EQ-10043",
           name: "Drehstrom-Asynchronmotor Siemens 45kW",
           manufacturer: "Siemens",
@@ -72,6 +91,7 @@ export default async function MaintenancePlansPage() {
         },
         {
           tenantId: tenant.id,
+          functionalLocationId: floc.id,
           equipmentNumber: "EQ-10044",
           name: "Schraubenkompressor Kaeser CSDX 165",
           manufacturer: "Kaeser",
@@ -271,26 +291,29 @@ export default async function MaintenancePlansPage() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 p-6 md:p-8 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-800 pb-5">
-        <div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-8 space-y-6">
+      {/* Header mit Zurück-Button */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <BackButton fallbackUrl="/maintenance" label="Zurück zum Wartungs-Hub" />
+          </div>
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
-            <Calendar className="h-7 w-7 text-blue-500" />
+            <Calendar className="h-7 w-7 text-cyan-500" />
             Zyklische Wartungspläne & Checkpositionen Batch-Pflege
           </h1>
-          <p className="text-sm text-neutral-400 mt-1">
+          <p className="text-sm text-slate-400 mt-1">
             Verwalte hunderte Prüfpositionen effizient: Multi-Row Selektion, Direktbearbeitung
             in der Zelle per Tastatur und Massenänderung für Intervalle, Rollen und Vorlagen.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="border-neutral-700 bg-neutral-900 text-neutral-300">
-            <Layers className="h-3.5 w-3.5 text-blue-400 mr-1" />
+          <Badge variant="outline" className="border-slate-700 bg-slate-900 text-slate-300">
+            <Layers className="h-3.5 w-3.5 text-cyan-400 mr-1" />
             TanStack Virtual Grid
           </Badge>
-          <Badge variant="outline" className="border-neutral-700 bg-neutral-900 text-neutral-300">
+          <Badge variant="outline" className="border-slate-700 bg-slate-900 text-slate-300">
             <Sliders className="h-3.5 w-3.5 text-emerald-400 mr-1" />
             50+ Batch Modifikationen
           </Badge>

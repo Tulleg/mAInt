@@ -34,6 +34,7 @@ import {
   Save,
   RotateCw,
 } from "lucide-react";
+import { toast } from "sonner";
 
 export interface BatchPlanItemRow {
   id: string;
@@ -120,9 +121,16 @@ export function MaintenancePlanBatchGrid({
     // 2. Server Action
     startTransition(async () => {
       try {
-        await updatePlanItemInlineAction(rowId, field, value);
-      } catch (err) {
-        setBannerMessage("Fehler beim Speichern: " + String(err));
+        const res = await updatePlanItemInlineAction(rowId, field, value);
+        if (res && (res as any).success === false) {
+          toast.error((res as any).message || "Fehler beim Speichern der Änderung.");
+        } else {
+          toast.success("Änderung erfolgreich gespeichert.");
+        }
+      } catch (err: any) {
+        const errorMsg = err?.message || String(err);
+        setBannerMessage("Fehler beim Speichern: " + errorMsg);
+        toast.error("Fehler beim Speichern: " + errorMsg);
       }
     });
   };
@@ -149,11 +157,16 @@ export function MaintenancePlanBatchGrid({
               }
             : undefined;
 
-        await bulkUpdatePlanItemsAction({
+        const res = await bulkUpdatePlanItemsAction({
           itemIds: selectedItemIds,
           updates,
           cycleUpdate,
         });
+
+        if (res && res.success === false) {
+          toast.error(res.message || "Fehler beim Ausführen des Batch-Updates.");
+          return;
+        }
 
         // Lokalen State synchronisieren
         setData((old) =>
@@ -188,9 +201,11 @@ export function MaintenancePlanBatchGrid({
           })
         );
 
-        setBannerMessage(
-          `Erfolgreich ${selectedItemIds.length} Positionen im Batch aktualisiert!`
-        );
+        const successNotice =
+          res?.message ||
+          `Erfolgreich ${selectedItemIds.length} Positionen im Batch aktualisiert!`;
+        toast.success(successNotice);
+        setBannerMessage(successNotice);
         setRowSelection({});
         // Reset bulk fields
         setBulkInterval("");
@@ -198,8 +213,10 @@ export function MaintenancePlanBatchGrid({
         setBulkTemplateId("");
         setBulkEquipmentId("");
         setTimeout(() => setBannerMessage(null), 4000);
-      } catch (err) {
-        setBannerMessage("Fehler beim Ausführen der Bulk-Aktion: " + String(err));
+      } catch (err: any) {
+        const errorMsg = err?.message || String(err);
+        setBannerMessage("Fehler beim Ausführen der Bulk-Aktion: " + errorMsg);
+        toast.error("Batch-Update fehlgeschlagen: " + errorMsg);
       }
     });
   };
@@ -213,12 +230,12 @@ export function MaintenancePlanBatchGrid({
           <button
             type="button"
             onClick={table.getToggleAllRowsSelectedHandler()}
-            className="flex items-center justify-center p-1 text-neutral-400 hover:text-white"
+            className="flex items-center justify-center min-h-[44px] min-w-[44px] p-2 text-slate-400 hover:text-white"
           >
             {table.getIsAllRowsSelected() ? (
-              <CheckSquare className="h-4 w-4 text-blue-500" />
+              <CheckSquare className="h-4 w-4 text-cyan-500" />
             ) : table.getIsSomeRowsSelected() ? (
-              <CheckSquare className="h-4 w-4 text-blue-400 opacity-60" />
+              <CheckSquare className="h-4 w-4 text-cyan-400 opacity-60" />
             ) : (
               <Square className="h-4 w-4" />
             )}
@@ -228,10 +245,10 @@ export function MaintenancePlanBatchGrid({
           <button
             type="button"
             onClick={row.getToggleSelectedHandler()}
-            className="flex items-center justify-center p-1 text-neutral-400 hover:text-white"
+            className="flex items-center justify-center min-h-[44px] min-w-[44px] p-2 text-slate-400 hover:text-white"
           >
             {row.getIsSelected() ? (
-              <CheckSquare className="h-4 w-4 text-blue-500" />
+              <CheckSquare className="h-4 w-4 text-cyan-500" />
             ) : (
               <Square className="h-4 w-4" />
             )}
@@ -243,7 +260,7 @@ export function MaintenancePlanBatchGrid({
         accessorKey: "positionNumber",
         header: "Pos.",
         cell: ({ getValue }) => (
-          <span className="font-mono text-xs text-neutral-400">#{getValue() as number}</span>
+          <span className="font-mono text-xs text-slate-400">#{getValue() as number}</span>
         ),
         size: 50,
       },
@@ -260,9 +277,9 @@ export function MaintenancePlanBatchGrid({
                   handleInlineChange(row.original.id, "title", e.target.value);
                 }
               }}
-              className="bg-transparent border-0 border-b border-transparent hover:border-neutral-700 focus:border-blue-500 text-xs font-medium text-neutral-100 px-1 py-0.5 w-full focus:outline-none rounded"
+              className="bg-transparent border-0 border-b border-transparent hover:border-slate-700 focus:border-cyan-500 text-xs font-medium text-slate-100 px-1 py-0.5 w-full focus:outline-none rounded"
             />
-            <span className="text-[10px] text-neutral-500 font-mono block px-1">
+            <span className="text-[10px] text-slate-500 font-mono block px-1">
               {row.original.planNumber} ({row.original.planName})
             </span>
           </div>
@@ -272,8 +289,8 @@ export function MaintenancePlanBatchGrid({
         id: "cycle",
         header: "Zyklus / Intervall",
         cell: ({ row }) => (
-          <Badge variant="outline" className="font-mono text-[11px] border-neutral-700">
-            <Calendar className="h-3 w-3 mr-1 text-blue-400" />
+          <Badge variant="outline" className="font-mono text-[11px] border-slate-700">
+            <Calendar className="h-3 w-3 mr-1 text-cyan-400" />
             {row.original.cycleValue} {row.original.cycleUnit}
           </Badge>
         ),
@@ -288,7 +305,7 @@ export function MaintenancePlanBatchGrid({
             onChange={(e) =>
               handleInlineChange(row.original.id, "equipmentId", e.target.value || null)
             }
-            className="w-full text-xs bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-neutral-200 focus:outline-none focus:border-blue-500"
+            className="w-full text-xs bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-cyan-500"
           >
             <option value="">-- Keine Zuordnung --</option>
             {equipments.map((eq) => (
@@ -308,7 +325,7 @@ export function MaintenancePlanBatchGrid({
             onChange={(e) =>
               handleInlineChange(row.original.id, "assignedRoleId", e.target.value || null)
             }
-            className="w-full text-xs bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-neutral-200 focus:outline-none focus:border-blue-500"
+            className="w-full text-xs bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-cyan-500"
           >
             <option value="">-- Alle Techniker --</option>
             {roles.map((r) => (
@@ -328,7 +345,7 @@ export function MaintenancePlanBatchGrid({
             onChange={(e) =>
               handleInlineChange(row.original.id, "inspectionTemplateId", e.target.value || null)
             }
-            className="w-full text-xs bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-neutral-200 focus:outline-none focus:border-blue-500"
+            className="w-full text-xs bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-cyan-500"
           >
             <option value="">-- Kein Protokoll --</option>
             {templates.map((t) => (
@@ -353,9 +370,9 @@ export function MaintenancePlanBatchGrid({
                   handleInlineChange(row.original.id, "estimatedDurationMinutes", val);
                 }
               }}
-              className="w-16 bg-transparent border-b border-transparent hover:border-neutral-700 focus:border-blue-500 text-xs font-mono text-right text-neutral-200 px-1 py-0.5 focus:outline-none"
+              className="w-16 bg-transparent border-b border-transparent hover:border-slate-700 focus:border-cyan-500 text-xs font-mono text-right text-slate-200 px-1 py-0.5 focus:outline-none"
             />
-            <span className="text-[10px] text-neutral-500">min</span>
+            <span className="text-[10px] text-slate-500">min</span>
           </div>
         ),
         size: 90,
@@ -395,9 +412,9 @@ export function MaintenancePlanBatchGrid({
 
       {/* STICKY BULK-ACTION-BAR BEI MEHRFACHAUSWAHL */}
       {selectedCount > 0 && (
-        <div className="sticky top-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-600/80 bg-neutral-900/95 p-3.5 shadow-2xl backdrop-blur-md">
+        <div className="sticky top-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-600/80 bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-md">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white shadow">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-600 text-xs font-bold text-white shadow">
               {selectedCount}
             </span>
             <div>
@@ -423,7 +440,7 @@ export function MaintenancePlanBatchGrid({
               <select
                 value={bulkIntervalUnit}
                 onChange={(e) => setBulkIntervalUnit(e.target.value as any)}
-                className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200"
+                className="h-8 rounded border border-slate-700 bg-slate-900 px-2 text-xs text-slate-200"
               >
                 <option value="DAYS">Tage</option>
                 <option value="WEEKS">Wochen</option>
@@ -436,7 +453,7 @@ export function MaintenancePlanBatchGrid({
             <select
               value={bulkRoleId}
               onChange={(e) => setBulkRoleId(e.target.value)}
-              className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 max-w-[150px]"
+              className="h-8 rounded border border-slate-700 bg-slate-900 px-2 text-xs text-slate-200 max-w-[150px]"
             >
               <option value="">Techniker-Rolle...</option>
               {roles.map((r) => (
@@ -450,7 +467,7 @@ export function MaintenancePlanBatchGrid({
             <select
               value={bulkTemplateId}
               onChange={(e) => setBulkTemplateId(e.target.value)}
-              className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 max-w-[160px]"
+              className="h-8 rounded border border-slate-700 bg-slate-900 px-2 text-xs text-slate-200 max-w-[160px]"
             >
               <option value="">Protokoll-Vorlage...</option>
               {templates.map((t) => (
@@ -464,7 +481,7 @@ export function MaintenancePlanBatchGrid({
               size="sm"
               onClick={handleApplyBulkAction}
               disabled={isPending}
-              className="h-8 bg-blue-600 hover:bg-blue-700 text-white text-xs gap-1.5"
+              className="h-8 bg-cyan-600 hover:bg-blue-700 text-white text-xs gap-1.5"
             >
               <Save className="h-3.5 w-3.5" />
               {isPending ? "Wende an..." : "Alle aktualisieren"}
@@ -474,7 +491,7 @@ export function MaintenancePlanBatchGrid({
               variant="ghost"
               size="sm"
               onClick={() => setRowSelection({})}
-              className="h-8 text-xs text-neutral-400 hover:text-white"
+              className="h-8 text-xs text-slate-400 hover:text-white"
             >
               Abbrechen
             </Button>
@@ -485,7 +502,7 @@ export function MaintenancePlanBatchGrid({
       {/* Suche & Tabellen-Filter */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full max-w-sm">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-neutral-500" />
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Wartungspositionen oder Pläne filtern..."
             value={globalFilter ?? ""}
@@ -494,7 +511,7 @@ export function MaintenancePlanBatchGrid({
           />
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-neutral-400">
+        <div className="flex items-center gap-2 text-xs text-slate-400">
           <span>Gesamt: {data.length} Positionen</span>
           <span>•</span>
           <span>
@@ -504,17 +521,17 @@ export function MaintenancePlanBatchGrid({
       </div>
 
       {/* TanStack Data Grid */}
-      <Card className="border-neutral-800 bg-neutral-950 overflow-hidden">
+      <Card className="border-slate-800 bg-slate-950 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-neutral-300">
-            <thead className="bg-neutral-900/90 text-neutral-400 uppercase tracking-wider border-b border-neutral-800">
+          <table className="w-full text-left text-xs text-slate-300">
+            <thead className="bg-slate-900/90 text-slate-400 uppercase tracking-wider border-b border-slate-800">
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
                     <th
                       key={header.id}
                       style={{ width: header.getSize() }}
-                      className="p-3 font-semibold border-r border-neutral-800 last:border-r-0"
+                      className="p-3 font-semibold border-r border-slate-800 last:border-r-0"
                     >
                       {header.isPlaceholder
                         ? null
@@ -524,19 +541,19 @@ export function MaintenancePlanBatchGrid({
                 </tr>
               ))}
             </thead>
-            <tbody className="divide-y divide-neutral-800/80 bg-neutral-950">
+            <tbody className="divide-y divide-slate-800/80 bg-slate-950">
               {table.getRowModel().rows.length > 0 ? (
                 table.getRowModel().rows.map((row) => (
                   <tr
                     key={row.id}
-                    className={`hover:bg-neutral-900/60 transition-colors ${
-                      row.getIsSelected() ? "bg-blue-950/20" : ""
+                    className={`hover:bg-slate-900/60 transition-colors ${
+                      row.getIsSelected() ? "bg-cyan-950/20" : ""
                     }`}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td
                         key={cell.id}
-                        className="p-2.5 border-r border-neutral-800/60 last:border-r-0"
+                        className="p-2.5 border-r border-slate-800/60 last:border-r-0"
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
@@ -545,7 +562,7 @@ export function MaintenancePlanBatchGrid({
                 ))
               ) : (
                 <tr>
-                  <td colSpan={columns.length} className="text-center py-8 text-neutral-500">
+                  <td colSpan={columns.length} className="text-center py-8 text-slate-500">
                     Keine passenden Wartungspositionen gefunden.
                   </td>
                 </tr>
@@ -555,14 +572,14 @@ export function MaintenancePlanBatchGrid({
         </div>
 
         {/* Pagination Footer */}
-        <div className="flex items-center justify-between p-3 border-t border-neutral-800 bg-neutral-900/60 text-xs">
+        <div className="flex items-center justify-between p-3 border-t border-slate-800 bg-slate-900/60 text-xs">
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={() => table.previousPage()}
               disabled={!table.getCanPreviousPage()}
-              className="h-7 px-2.5 text-xs"
+              className="h-11 min-h-[44px] px-3.5 text-xs"
             >
               Zurück
             </Button>
@@ -571,13 +588,13 @@ export function MaintenancePlanBatchGrid({
               size="sm"
               onClick={() => table.nextPage()}
               disabled={!table.getCanNextPage()}
-              className="h-7 px-2.5 text-xs"
+              className="h-11 min-h-[44px] px-3.5 text-xs"
             >
               Weiter
             </Button>
           </div>
 
-          <span className="text-neutral-500">
+          <span className="text-slate-500">
             Zeige {table.getState().pagination.pageIndex * 15 + 1} -{" "}
             {Math.min((table.getState().pagination.pageIndex + 1) * 15, data.length)} von{" "}
             {data.length} Einträgen

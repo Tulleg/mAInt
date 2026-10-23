@@ -2,6 +2,7 @@ import { localDb, LocalMutationOutboxItem, LocalMaintenanceOrder } from "./index
 
 export interface SyncState {
   isOnline: boolean;
+  isSimulatedOffline: boolean;
   isSyncing: boolean;
   pendingMutationsCount: number;
   lastSyncAt: Date | null;
@@ -20,7 +21,8 @@ type SyncStateListener = (state: SyncState) => void;
 class SyncManager {
   private listeners: Set<SyncStateListener> = new Set();
   private state: SyncState = {
-    isOnline: typeof navigator !== "undefined" ? navigator.onLine : true,
+    isOnline: true,
+    isSimulatedOffline: false,
     isSyncing: false,
     pendingMutationsCount: 0,
     lastSyncAt: null,
@@ -31,8 +33,15 @@ class SyncManager {
 
   constructor() {
     if (typeof window !== "undefined") {
+      const storedSimulated = window.sessionStorage?.getItem("maintai_simulated_offline") === "true";
+      const actualOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
+
+      this.state.isSimulatedOffline = storedSimulated;
+      this.state.isOnline = storedSimulated ? false : actualOnline;
+
       this.initNetworkListeners();
       this.refreshPendingCount();
+
       // Periodischer Sync-Check alle 15 Sekunden
       this.syncIntervalId = setInterval(() => {
         if (this.state.isOnline && !this.state.isSyncing) {
@@ -44,13 +53,56 @@ class SyncManager {
 
   private initNetworkListeners() {
     window.addEventListener("online", () => {
-      this.updateState({ isOnline: true });
-      this.flushOutbox();
+      if (!this.state.isSimulatedOffline) {
+        this.updateState({ isOnline: true });
+        this.flushOutbox();
+      }
     });
 
     window.addEventListener("offline", () => {
-      this.updateState({ isOnline: false });
+      if (!this.state.isSimulatedOffline) {
+        this.updateState({ isOnline: false });
+      }
     });
+  }
+
+  /**
+   * Aktiviert oder deaktiviert den simulierten Offline-Modus zum Testen
+   * der Dexie Outbox und des Offline-Verhaltens.
+   */
+  public setSimulatedOffline(simulated: boolean): void {
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage?.setItem("maintai_simulated_offline", String(simulated));
+      } catch {}
+    }
+
+    const actualOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
+    const nextOnline = simulated ? false : actualOnline;
+
+    this.updateState({
+      isSimulatedOffline: simulated,
+      isOnline: nextOnline,
+      lastSyncError: null,
+    });
+
+    if (nextOnline) {
+      this.flushOutbox();
+    }
+  }
+
+  public toggleSimulatedOffline(): boolean {
+    const next = !this.state.isSimulatedOffline;
+    this.setSimulatedOffline(next);
+    return next;
+  }
+
+  public get isOnline(): boolean {
+    return this.state.isOnline;
+  }
+
+  public get isSimulated(): boolean {
+    return this.state.isSimulatedOffline;
   }
 
   public subscribe(listener: SyncStateListener): () => void {

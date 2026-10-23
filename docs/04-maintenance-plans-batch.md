@@ -1,6 +1,6 @@
-# 📅 3. Zyklische Wartungspläne & Batch-Pflege
+# 📅 4. Zyklische Wartungspläne & Batch-Pflege
 
-Pfad in der Anwendung: `Wartung > Wartungspläne & Batch-Grid` (`/maintenance-plans`)
+Pfad in der Anwendung: `WARTUNG & PRÜFUNGEN > Wartungspläne (Batch)` (`/maintenance-plans`) und `Wartungs-Hub` (`/maintenance`)
 
 ## Konzept
 Verwaltung hunderter wiederkehrender Prüfpositionen (`maintenance_plan_items`) in einer hochperformanten TanStack-Data-Grid-Oberfläche.
@@ -26,3 +26,16 @@ Sobald eine oder mehrere Zeilen über die linken Checkboxen ausgewählt werden (
    - Übergibt alle markierten Positionen auf Knopfdruck an eine Fachgruppe (z. B. "Mechanik-Schlosser").
 3. **Protokoll-Vorlage verknüpfen:**
    - Weist allen Positionen eine standardisierte Prüfcheckliste zu.
+
+---
+
+## 3. Navigationsstandards & Absprünge
+
+Gemäß den **Design- & Navigationsrichtlinien** (`docs/design-rules.md`):
+- **Menüpfad:** Erreichbar über `WARTUNG > Wartungspläne (Batch)` (`/maintenance-plans`) sowie aus dem übergeordneten `Wartungs-Hub` (`/maintenance`).
+- **Verknüpfte Absprünge:**
+  - Klick auf verknüpfte Equipments führt zur Anlagenansicht (`/equipments`).
+  - Klick auf hinterlegte Prüfvorlagen öffnet den Vorlagen-Editor (`/inspections`).
+- **Standardisierter Rücksprung:**
+  - In allen Detaildialogen und Bearbeitungsmasken ist links oben ein standardisierter Zurück-Button mit dem Lucide-Icon **`ArrowLeft`** und mindestens **44px Touch-Höhe** (`min-h-[44px]`) verankert.
+  - Ziel: Schnelle Rückkehr zum Wartungs-Hub (`/maintenance`) oder zur Übersichtsliste.
