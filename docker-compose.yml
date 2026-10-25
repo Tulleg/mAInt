@@ -1,28 +1,49 @@
 services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@postgres:5432/${POSTGRES_DB:-maintai}
+      - REDIS_URL=redis://redis:6379
+      - PORT=3000
+      - AI_PROVIDER=${AI_PROVIDER:-GEMINI}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - AI_ENCRYPTION_KEY=${AI_ENCRYPTION_KEY:-}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - SAP_MODE=${SAP_MODE:-STANDALONE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: maintai_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: maintai
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
+      POSTGRES_DB: ${POSTGRES_DB:-maintai}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d maintai"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-maintai}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:alpine
-    container_name: maintai_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
