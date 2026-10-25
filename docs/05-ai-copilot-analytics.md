@@ -130,6 +130,126 @@ Die Export-Aktionen sind über intuitive Dropdown-Menüs (`[📥 Exportieren]`) 
 2. **Offline-Fähigkeit (PWA):** Techniker und Meister auf Hallen-Tablets können Auswertungen und Auftragsübersichten auch dann als PDF, Bild, CSV oder Excel exportieren, wenn das Gerät im Funkloch (z. B. Reinraum, Untergeschoss, abgeschirmte Produktionszelle) vorübergehend offline ist.
 3. **Null Latenz & Keine Serverlast:** Der Export erfolgt ohne HTTP-Roundtrip in wenigen Millisekunden und entlastet das Backend vollständig.
 
+### 3.6 Interaktiver Diagramm-Assistent & Klärungsdialog (Clarification Loop)
+
+Im Instandhaltungsalltag formulieren Werker und Schichtleiter Diagrammwünsche oft verkürzt oder unvollständig (z. B. *„Zeige mir ein Diagramm“*, *„Erstelle einen Chart“*, *„Visualisiere die Störungen“* oder *„Ausfallzeiten als Grafik“*). Anstatt ein zufälliges Standarddiagramm auszugeben oder mit einem Fehler abzubrechen, schaltet der Analytics-Agent (`executeAnalyticsPrompt` in `src/lib/ai/analytics-agent.ts`) in einen **geführten, interaktiven Klärungsdialog**.
+
+#### 3.6.1 Die fünf Klärungsdimensionen
+
+Bei unvollständigen Diagrammwünschen analysiert der Intent-Router (`classifyCopilotIntent`) und der Analytics-Agent die fehlenden Parameter und fragt den Anwender gezielt nach den fünf Schlüsseldimensionen industrieller Datenvisualisierung:
+
+1. **Diagrammtyp (`chartType`):**
+   - **Balkendiagramm (`bar`):** Ideal für vergleichende Rangfolgen (z. B. Stillstandszeiten nach Maschine, Top-Ersatzteilkosten).
+   - **Liniendiagramm (`line`):** Optimal für zeitliche Verläufe über Tage, Kalenderwochen oder Monate.
+   - **Kreis-/Kuchendiagramm (`pie`):** Zur Veranschaulichung prozentualer Anteile und Prioritätsverteilungen.
+   - **Composed-Diagramm mit Trendlinie (`composed` / `hasTrendline`):** Kombinationsdiagramm aus Balken/Flächen für absolute Messwerte und einer linearen Regressionslinie zur Früherkennung.
+   - **Datentabelle (`table`):** Tabellarische Detailübersicht mit CSV-/Excel-Exportoption.
+2. **Werte & Kennzahlen (`metric`):**
+   - Stillstands- und Ausfallzeiten in Minuten (`downtime_minutes`)
+   - Anzahl der Störungen und Aufträge (`COUNT(id)`)
+   - Ersatzteil- und Materialkosten (`SUM(quantity_consumed * unit_price_snapshot)`)
+   - Zuverlässigkeitskennzahlen (MTTR – Mean Time to Repair, MTBF – Mean Time Between Failures)
+3. **Bereich oder Maschine (`area` / `equipment`):**
+   - Konkretes Equipment (z. B. *KUKA Roboter 01 – Rohbau Zelle 3*, *Pumpe P-102*, *Siemens Antriebsmotor*)
+   - Organisatorischer Bereich (z. B. *Rohbau*, *Montage Linie 2*, *Lackiererei*, *Zentrale Infrastruktur*)
+   - Werksebene (*Gesamtes Werk 1*)
+4. **Trendlinie & zeitlicher Verlauf (`hasTrendline` / `trendlineKey`):**
+   - Einblendung einer mathematisch berechneten linearen Trendlinie (`trend`) über den Betrachtungszeitraum (z. B. letzte 7 Tage, 30 Tage, Monatsverlauf).
+   - Früherkennung von Verschleißtrends und Wiederholfehlern vor Erreichen kritischer Schwellwerte.
+5. **Farbschemata & Ampelfarben (`colorPalette`):**
+   - **Standard-Palette:** Industrielles MaintAI-Blau/Grün/Schiefer (`#3B82F6`, `#10B981`, `#F59E0B`, `#EF4444`, `#8B5CF6`).
+   - **Ampelfarben (Traffic Light):** Prio-orientierte Signalfarben Rot (`#EF4444`), Gelb/Orange (`#F59E0B`) und Grün (`#10B981`) für Notfälle und Risiko-Einstufungen.
+   - **Zweifarbig (Blau/Grün bzw. Orange/Blau):** Klare Trennung zwischen Ist-Werten und Trendlinien.
+
+#### 3.6.2 Strukturierte 1-Klick-Auswahlchips
+
+Zusammen mit der formulierten Klärungsfrage liefert das System ein Array strukturierter Auswahl-Optionen (`clarificationOptions` mit `field: "general"`). Der Nutzer kann die gewünschte Konfiguration mit einem einzigen Klick oder Tap auf dem Touch-Tablet übernehmen:
+
+- `[Balkendiagramm: Ausfallzeiten nach Maschine (Rohbau Zelle 3, Standardfarben)]`
+- `[Liniendiagramm mit Trendlinie: Störungen letzte 30 Tage (Gesamtes Werk, Blau/Grün)]`
+- `[Kreisdiagramm: Störungen nach Priorität (Gesamtes Werk, Ampelfarben)]`
+- `[Balkendiagramm: Top 5 Ersatzteilkosten (Montage Linie 2, Orange/Blau)]`
+- `[Liniendiagramm mit Trendlinie: Ausfallzeiten letzte 7 Tage (KUKA Roboter 01)]`
+
+#### 3.6.3 Beispieldialoge im Conversational Workspace
+
+##### Beispieldialog 1: Unvollständige Anfrage ➔ Liniendiagramm mit Trendlinie
+```text
+User:
+"Zeige mir ein Diagramm"
+
+MaintAI Copilot (Status: NEEDS_CLARIFICATION):
+"Um das passende Diagramm zu erstellen, benötige ich noch ein paar Angaben:
+1. Diagrammtyp: Welcher Typ soll es sein (z. B. Balkendiagramm, Liniendiagramm mit Trendlinie oder Kreisdiagramm)?
+2. Werte/Kennzahlen: Welche Messgröße möchtest du sehen (z. B. Ausfallzeiten in Minuten, Anzahl Störungen oder Ersatzteilkosten)?
+3. Bereich/Maschine: Für welche Anlage oder welchen Bereich (z. B. Rohbau Zelle 3 / KUKA, Montage Linie 2 oder Gesamtes Werk)?
+4. Trendlinie: Soll eine lineare Trendlinie oder ein zeitlicher Verlauf dargestellt werden?
+5. Farben: Bevorzugst du bestimmte Farben (z. B. Standard Blau/Rot oder Ampelfarben Rot/Gelb/Grün)?"
+
+[Chips]:
+- "Liniendiagramm mit Trendlinie: Störungen letzte 30 Tage (Gesamtes Werk, Blau/Grün)"
+- "Balkendiagramm: Ausfallzeiten nach Maschine (Rohbau Zelle 3, Standardfarben)"
+- "Kreisdiagramm: Störungen nach Priorität (Gesamtes Werk, Ampelfarben)"
+- "Balkendiagramm: Top 5 Ersatzteilkosten (Montage Linie 2, Orange/Blau)"
+
+User klickt:
+[Liniendiagramm mit Trendlinie: Störungen letzte 30 Tage (Gesamtes Werk, Blau/Grün)]
+
+MaintAI Copilot (Status: SUCCESS):
+Rendert Recharts-Liniendiagramm:
+- Titel: "Störungsverlauf mit Trendlinie: Letzte 30 Tage (Gesamtes Werk)"
+- X-Achse: Kalenderwochen (KW 40, KW 41, KW 42, KW 43)
+- Serie 1 (Linie blau #3B82F6): "Anzahl Störungen"
+- Serie 2 (Trendlinie grün #10B981): "Trendlinie (linear)"
+- KI-Zusammenfassung: "Erfreulicher Abwärtstrend: Die wöchentlichen Störungen im gesamten Werk sind im 30-Tage-Verlauf von 18 auf 9 gesunken (lineare Reduktion um ca. 46%)."
+```
+
+##### Beispieldialog 2: Teil-spezifizierte Anfrage ➔ Kreisdiagramm mit Ampelfarben
+```text
+User:
+"Zeige mir ein Diagramm zu den Störungen"
+
+MaintAI Copilot (Status: NEEDS_CLARIFICATION):
+"Für dein Diagramm zu den Störungen fehlen noch Details:
+- Diagrammtyp: Liniendiagramm mit Trendlinie, Balkendiagramm nach Bereich oder Kreisdiagramm nach Priorität?
+- Bereich/Maschine: Welche Anlage oder welcher Bereich (z. B. Rohbau Zelle 3, Montage oder Gesamtes Werk)?
+- Trendlinie: Soll eine Trendlinie zur Früherkennung eingeblendet werden?
+- Farben: Standardfarben oder Ampelfarben?"
+
+[Chips]:
+- "Kreisdiagramm: Störungen nach Priorität (Gesamtes Werk, Ampelfarben)"
+- "Liniendiagramm mit Trendlinie: Störungen letzte 30 Tage (Gesamtes Werk, Blau/Grün)"
+- "Balkendiagramm: Störungen nach Maschine (Rohbau Zelle 3, Standardfarben)"
+
+User klickt:
+[Kreisdiagramm: Störungen nach Priorität (Gesamtes Werk, Ampelfarben)]
+
+MaintAI Copilot (Status: SUCCESS):
+Rendert Recharts-Donut/Kreisdiagramm:
+- Segmente: 1_EMERGENCY (#EF4444 Rot, 4 Aufträge), 2_HIGH (#F59E0B Gelb, 9 Aufträge), 3_MEDIUM (#3B82F6 Blau, 22 Aufträge), 4_LOW (#10B981 Grün, 15 Aufträge)
+- KI-Zusammenfassung: "Von 50 registrierten Aufträgen im Werk entfallen 4 auf akute Notfälle (1_EMERGENCY) und 9 auf hohe Priorität (2_HIGH)."
+```
+
+##### Beispieldialog 3: Anlagenmehrdeutigkeit ➔ Roboter-Auswahl
+```text
+User:
+"Wie stand der KUKA Roboter letzte Woche?"
+
+MaintAI Copilot (Status: NEEDS_CLARIFICATION):
+"Welchen KUKA-Roboter meinst du genau? (Verfügbar: KUKA Roboter 01 - Rohbau Zelle 3, KUKA Palettierer - Linie 2). Und welcher Zeitraum der letzten Woche soll ausgewertet werden?"
+
+[Chips]:
+- "KUKA Roboter 01 - Rohbau Zelle 3 (Ganze letzte Woche Mo-So)"
+- "KUKA Palettierer - Linie 2 (Ganze letzte Woche Mo-So)"
+- "Vergleiche beide KUKA-Roboter der letzten Woche"
+
+User klickt:
+[KUKA Roboter 01 - Rohbau Zelle 3 (Ganze letzte Woche Mo-So)]
+
+MaintAI Copilot (Status: SUCCESS):
+Rendert Recharts-Säulendiagramm (Montag bis Sonntag) mit Stillstandsminuten und Störungsanzahl.
+```
+
 ---
 
 ## 4. Navigationsstandards & Absprünge

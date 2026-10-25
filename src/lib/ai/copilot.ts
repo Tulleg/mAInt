@@ -46,7 +46,7 @@ export interface OrderDraftWidgetPayload {
 
 export interface ChartViewWidgetPayload {
   type: "chart_view";
-  chartType: "bar" | "line" | "pie" | "table" | "kpi";
+  chartType: "bar" | "line" | "pie" | "table" | "kpi" | "composed";
   title?: string;
   data: Array<Record<string, any>>;
   chartData?: Array<Record<string, any>>;
@@ -57,10 +57,17 @@ export interface ChartViewWidgetPayload {
     xAxisKey?: string;
     series?: Array<{ key: string; label: string; color?: string }>;
     colors?: string[];
+    hasTrendline?: boolean;
+    trendlineKey?: string;
+    colorPalette?: string[];
     [key: string]: any;
   };
   summary?: string;
+  summaryInsight?: string;
   rawSql?: string;
+  hasTrendline?: boolean;
+  trendlineKey?: string;
+  colorPalette?: string[];
 }
 
 export interface TableViewWidgetPayload {
@@ -97,7 +104,7 @@ export interface UpdateViewConfigParams {
 
 export interface AnalyticsChartParams {
   metric?: string;
-  chartType: "bar" | "line" | "pie" | "kpi" | "table";
+  chartType: "bar" | "line" | "pie" | "kpi" | "table" | "composed";
   analyticsPrompt: string;
   targetEquipmentId?: string;
   timeRange?: string;
@@ -1063,12 +1070,17 @@ export function heuristicIntentClassification(
     lower.includes("mtbf") ||
     lower.includes("ausfallzeit") ||
     lower.includes("trend") ||
+    lower.includes("kuchen") ||
+    lower.includes("torte") ||
+    lower.includes("pie") ||
     lower.includes("wie viele störungen") ||
     lower.includes("häufigste fehler");
 
   if (isAnalytics) {
     let chartType: AnalyticsChartParams["chartType"] = "bar";
-    if (lower.includes("kuchen") || lower.includes("pie") || lower.includes("verteilung") || lower.includes("anteil")) {
+    if (lower.includes("trendlinie") || (lower.includes("trend") && (lower.includes("balken") || lower.includes("linie")))) {
+      chartType = "composed";
+    } else if (lower.includes("kuchen") || lower.includes("pie") || lower.includes("torte") || lower.includes("verteilung") || lower.includes("anteil")) {
       chartType = "pie";
     } else if (lower.includes("verlauf") || lower.includes("linie") || lower.includes("trend") || lower.includes("line")) {
       chartType = "line";
@@ -1244,6 +1256,8 @@ export async function classifyCopilotIntent(
         lastAssistantMsg.content.includes("Welche Pumpe") ||
         lastAssistantMsg.content.includes("Welcher Roboter") ||
         lastAssistantMsg.content.includes("KUKA-Roboter") ||
+        lastAssistantMsg.content.includes("Welches Diagramm") ||
+        lastAssistantMsg.content.includes("Klärungsbedarf") ||
         lastAssistantMsg.content.includes("Betrachtungszeitraum") ||
         lastAssistantMsg.content.includes("Equipment aus") ||
         lastAssistantMsg.content.includes("nicht gefunden") ||

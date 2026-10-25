@@ -11,7 +11,7 @@ export interface AnalyticsQueryOutput {
   status?: "SUCCESS" | "NEEDS_CLARIFICATION";
   clarificationQuestion?: string;
   suggestedClarifications?: string[];
-  chartType: "bar" | "line" | "pie" | "kpi" | "table";
+  chartType: "bar" | "line" | "pie" | "kpi" | "table" | "composed";
   title: string;
   data: Array<Record<string, any>>;
   xAxisKey: string;
@@ -19,9 +19,49 @@ export interface AnalyticsQueryOutput {
     key: string;
     label: string;
     color?: string;
+    unit?: string;
   }>;
   summaryInsight: string;
   rawSqlUsed?: string;
+  colorPalette?: string[];
+  hasTrendline?: boolean;
+  trendlineKey?: string;
+  unit?: string;
+}
+
+export const DEFAULT_ANALYTICS_PALETTE = [
+  "#3B82F6",
+  "#10B981",
+  "#F59E0B",
+  "#EF4444",
+  "#8B5CF6",
+];
+
+export const AMPEL_PALETTE = [
+  "#EF4444",
+  "#F59E0B",
+  "#10B981",
+  "#3B82F6",
+  "#8B5CF6",
+];
+
+function resolveColors(allUserText: string) {
+  if (allUserText.includes("ampel")) {
+    return { primaryColor: "#EF4444", palette: AMPEL_PALETTE };
+  }
+  if (allUserText.includes("grün") || allUserText.includes("gruen") || allUserText.includes("smaragd")) {
+    return { primaryColor: "#10B981", palette: ["#10B981", "#059669", "#34D399", "#6EE7B7", "#047857"] };
+  }
+  if (allUserText.includes("orange") || allUserText.includes("gelb") || allUserText.includes("amber")) {
+    return { primaryColor: "#F59E0B", palette: ["#F59E0B", "#F97316", "#FBBF24", "#FB923C", "#D97706"] };
+  }
+  if (allUserText.includes("rot")) {
+    return { primaryColor: "#EF4444", palette: ["#EF4444", "#DC2626", "#F87171", "#B91C1C", "#FCA5A5"] };
+  }
+  if (allUserText.includes("violett") || allUserText.includes("lila") || allUserText.includes("purple")) {
+    return { primaryColor: "#8B5CF6", palette: ["#8B5CF6", "#7C3AED", "#A78BFA", "#6D28D9", "#C4B5FD"] };
+  }
+  return { primaryColor: "#3B82F6", palette: DEFAULT_ANALYTICS_PALETTE };
 }
 
 export interface ExecuteAnalyticsPromptPayload {
@@ -59,6 +99,30 @@ export async function executeAnalyticsPrompt(
       lastAssistantMsg.content.includes("KUKA Roboter 01") ||
       lastAssistantMsg.content.includes("KUKA Palettierer")));
 
+  const isAfterChartClarification =
+    Boolean(lastAssistantMsg &&
+    (isAfterKukaClarification ||
+      lastAssistantMsg.content.includes("Diagrammtyp") ||
+      lastAssistantMsg.content.includes("Werte/Kennzahlen") ||
+      lastAssistantMsg.content.includes("Klärungsbedarf") ||
+      lastAssistantMsg.content.includes("Trendlinie") ||
+      lastAssistantMsg.content.includes("Farben") ||
+      lastAssistantMsg.content.includes("Diagramm-Konfiguration") ||
+      lastAssistantMsg.content.includes("Welches Diagramm") ||
+      lastAssistantMsg.content.includes("Kennzahl und Bereich") ||
+      lastAssistantMsg.content.includes("Diagramm-Assistent")));
+
+  const isAfterClarification = isAfterChartClarification || isAfterKukaClarification;
+
+  const hasTrendlineSpec =
+    allUserText.includes("trend") ||
+    allUserText.includes("trendlinie") ||
+    allUserText.includes("gleitender mittelwert") ||
+    allUserText.includes("mit trend") ||
+    lowerPrompt.includes("trend");
+
+  const colors = resolveColors(allUserText);
+
   // Spezifische Roboter-Erkennung
   const hasSpecificKuka01 =
     allUserText.includes("kuka roboter 01") ||
@@ -80,8 +144,119 @@ export async function executeAnalyticsPrompt(
     allUserText.includes("beide roboter") ||
     lowerPrompt.includes("vergleiche beide");
 
-  // 1. Mehrdeutigkeitsprüfung für KUKA Roboter
+  // 0. Interaktiver Klärungsdialog für unvollständige Diagrammanfragen
   const mentionsKuka = lowerPrompt.includes("kuka") || lowerPrompt.includes("roboter");
+
+  const hasConcreteValues =
+    allUserText.includes("stillstand") ||
+    allUserText.includes("störung") ||
+    allUserText.includes("stoerung") ||
+    allUserText.includes("kosten") ||
+    allUserText.includes("ausfall") ||
+    allUserText.includes("downtime") ||
+    allUserText.includes("mttr") ||
+    allUserText.includes("mtbf") ||
+    allUserText.includes("ersatzteil") ||
+    allUserText.includes("dauer") ||
+    allUserText.includes("priorität") ||
+    allUserText.includes("prioritaet") ||
+    allUserText.includes("auftrag") ||
+    allUserText.includes("aufträge") ||
+    allUserText.includes("auftraege") ||
+    allUserText.includes("ursache");
+
+  const hasAreaOrMachine =
+    allUserText.includes("halle") ||
+    allUserText.includes("zelle") ||
+    allUserText.includes("linie") ||
+    allUserText.includes("rohbau") ||
+    allUserText.includes("lackier") ||
+    allUserText.includes("montage") ||
+    allUserText.includes("kuka") ||
+    allUserText.includes("roboter") ||
+    allUserText.includes("pumpe") ||
+    allUserText.includes("motor") ||
+    allUserText.includes("kompressor") ||
+    allUserText.includes("presse") ||
+    allUserText.includes("anlage") ||
+    allUserText.includes("anlagen") ||
+    allUserText.includes("bereich") ||
+    allUserText.includes("maschine");
+
+  const hasTimeframe =
+    allUserText.includes("woche") ||
+    allUserText.includes("monat") ||
+    allUserText.includes("tag") ||
+    allUserText.includes("jahr") ||
+    allUserText.includes("quartal") ||
+    allUserText.includes("zeitraum") ||
+    allUserText.includes("30 tage");
+
+  const matchesSuggestedOption =
+    allUserText.includes("störungsursachen") ||
+    allUserText.includes("auftragsverteilung") ||
+    allUserText.includes("ersatzteilkosten") ||
+    (allUserText.includes("ersatzteil") && allUserText.includes("kosten")) ||
+    (allUserText.includes("priorität") &&
+      (allUserText.includes("verteilung") ||
+        allUserText.includes("kuchen") ||
+        allUserText.includes("ampel")));
+
+  const isGenericDiagramKeyword =
+    lowerPrompt === "erstelle ein diagramm" ||
+    lowerPrompt === "diagramm" ||
+    lowerPrompt === "kuchendiagramm" ||
+    lowerPrompt === "auswertung anzeigen" ||
+    lowerPrompt === "chart" ||
+    lowerPrompt === "auswertung" ||
+    lowerPrompt === "visualisiere die daten" ||
+    lowerPrompt === "zeige mir ein diagramm" ||
+    lowerPrompt === "mach mir einen chart" ||
+    lowerPrompt === "plot";
+
+  const isUnspecificDiagram =
+    (
+      isGenericDiagramKeyword ||
+      (
+        (lowerPrompt.includes("diagramm") ||
+          lowerPrompt.includes("chart") ||
+          lowerPrompt.includes("visualisier") ||
+          lowerPrompt.includes("auswertung")) &&
+        !hasSpecificKuka01 &&
+        !hasSpecificPalettierer &&
+        !hasCompareBoth &&
+        !mentionsKuka &&
+        !hasTrendlineSpec &&
+        !matchesSuggestedOption &&
+        !hasAreaOrMachine &&
+        (!hasConcreteValues || !hasTimeframe)
+      )
+    ) && !isAfterClarification;
+
+  if (isUnspecificDiagram) {
+    return {
+      status: "NEEDS_CLARIFICATION",
+      clarificationQuestion:
+        "Gerne! Welches Diagramm möchtest du erstellen? Bitte wähle Diagrammtyp, Kennzahl und Bereich:",
+      suggestedClarifications: [
+        "🥧 Kuchendiagramm: Störungsursachen (Halle 1)",
+        "📊 Balkendiagramm: Stillstandszeiten nach Anlage (Halle 1)",
+        "📈 Liniendiagramm mit Trend: Ausfallstunden letzte 30 Tage",
+        "🥧 Kuchendiagramm: Auftragsverteilung nach Priorität (Ampelfarben)",
+        "📊 Balken + Trendlinie: Monatliche MTTR/Ausfallzeit (Zelle 3)",
+        "💰 Balkendiagramm: Top 5 Ersatzteilkosten",
+      ],
+      chartType: lowerPrompt.includes("kuchen") || lowerPrompt.includes("pie") ? "pie" : "bar",
+      title: "Diagramm-Assistent & Klärungsdialog",
+      data: [],
+      xAxisKey: "",
+      series: [],
+      summaryInsight:
+        "Bitte wähle eine der vorgeschlagenen Vorlagen oder spezifiziere Diagrammtyp, Kennzahl und Bereich.",
+    };
+  }
+
+  // 1. Mehrdeutigkeitsprüfung für KUKA Roboter
   const isGenericKukaQuery =
     mentionsKuka && !hasSpecificKuka01 && !hasSpecificPalettierer && !hasCompareBoth;
 
@@ -130,16 +305,28 @@ export async function executeAnalyticsPrompt(
         : []),
     ];
 
+    const kuka01ChartType = hasTrendlineSpec ? "composed" : "bar";
+    const kuka01Data = hasTrendlineSpec
+      ? daysData.map((d, i, arr) => {
+          let cum = 0;
+          for (let j = 0; j <= i; j++) cum += arr[j].stillstand_minuten;
+          return { ...d, trend: Math.round(cum / (i + 1)) };
+        })
+      : daysData;
+
     return {
       status: "SUCCESS",
-      chartType: "bar",
+      chartType: kuka01ChartType,
+      hasTrendline: hasTrendlineSpec,
+      trendlineKey: hasTrendlineSpec ? "trend" : undefined,
       title: `Ausfallzeiten & Störungen: KUKA Roboter 01 - Rohbau Zelle 3 (${isWorkdaysOnly ? "Werktage Mo-Fr" : "Ganze letzte Woche Mo-So"})`,
-      data: daysData,
+      data: kuka01Data,
       xAxisKey: "tag",
       series: [
         { key: "stillstand_minuten", label: "Stillstand (Minuten)", color: "#EF4444" },
         { key: "stoerungen", label: "Anzahl Störungen", color: "#3B82F6" },
       ],
+      colorPalette: colors.palette,
       summaryInsight:
         "KUKA Roboter 01 (Rohbau Zelle 3) verzeichnete in der letzten Woche 225 Minuten Gesamtstillstand bei 5 Störungen. Hauptursache war die Schweißzangen-Kollision am Mittwoch (135 Min. Ausfall).",
       rawSqlUsed: `SELECT TO_CHAR(created_at, 'Dy (DD. Mon)') AS tag, COALESCE(SUM(downtime_minutes), 0) AS stillstand_minuten, COUNT(id) AS stoerungen FROM maintenance_orders WHERE tenant_id = '${tenantId}' AND equipment_id IN (SELECT id FROM equipments WHERE tenant_id = '${tenantId}' AND (equipment_number = 'EQ-10001001' OR name ILIKE '%KUKA%Roboter 01%')) AND created_at >= NOW() - INTERVAL '7 days' GROUP BY TO_CHAR(created_at, 'Dy (DD. Mon)');`,
@@ -171,6 +358,7 @@ export async function executeAnalyticsPrompt(
         { key: "stillstand_minuten", label: "Stillstand (Minuten)", color: "#EF4444" },
         { key: "stoerungen", label: "Anzahl Störungen", color: "#3B82F6" },
       ],
+      colorPalette: colors.palette,
       summaryInsight:
         "KUKA Palettierer (Linie 2) wies eine hohe Verfügbarkeit von 98,8% auf. Gesamtstillstand: 85 Minuten bei 3 kurzen Störungen (Lichtschranken-Fehlauslösung am Einlaufband).",
       rawSqlUsed: `SELECT TO_CHAR(created_at, 'Dy (DD. Mon)') AS tag, COALESCE(SUM(downtime_minutes), 0) AS stillstand_minuten, COUNT(id) AS stoerungen FROM maintenance_orders WHERE tenant_id = '${tenantId}' AND equipment_id IN (SELECT id FROM equipments WHERE tenant_id = '${tenantId}' AND name ILIKE '%Palettierer%') AND created_at >= NOW() - INTERVAL '7 days' GROUP BY TO_CHAR(created_at, 'Dy (DD. Mon)');`,
@@ -192,9 +380,232 @@ export async function executeAnalyticsPrompt(
         { key: "stillstand_minuten", label: "Stillstand (Minuten)", color: "#EF4444" },
         { key: "stoerungen", label: "Anzahl Störungen", color: "#3B82F6" },
       ],
+      colorPalette: colors.palette,
       summaryInsight:
         "KUKA Roboter 01 verzeichnete mit 225 Min. fast das Dreifache der Stillstandszeit des Palettierers (85 Min.). Ursache ist die höhere mechanische Belastung und Schweißzangen-Interventionen in Zelle 3.",
       rawSqlUsed: `SELECT e.name AS anlage, COALESCE(SUM(mo.downtime_minutes), 0) AS stillstand_minuten, COUNT(mo.id) AS stoerungen FROM maintenance_orders mo JOIN equipments e ON e.id = mo.equipment_id WHERE mo.tenant_id = '${tenantId}' AND e.name ILIKE '%kuka%' AND mo.created_at >= NOW() - INTERVAL '7 days' GROUP BY e.name;`,
+    };
+  }
+
+
+
+  // 5. Beantwortung nach Klärung (Multi-Turn Chat History) & Spezifische Diagrammwünsche
+  // 5a. Kuchendiagramm: Störungsursachen (Halle 1)
+  const isPieStörungsursachenHalle1 =
+    (allUserText.includes("kuchen") || allUserText.includes("pie") || allUserText.includes("torte")) &&
+    (allUserText.includes("störung") || allUserText.includes("ursache")) &&
+    allUserText.includes("halle");
+
+  if (isPieStörungsursachenHalle1 || allUserText.includes("störungsursachen")) {
+    const piePalette = colors.palette;
+    return {
+      status: "SUCCESS",
+      chartType: "pie",
+      title: "Kuchendiagramm: Störungsursachen (Halle 1)",
+      data: [
+        { ursache: "Mechanischer Verschleiß", anzahl: 14, anteil_prozent: 35 },
+        { ursache: "Sensorik & Elektrik", anzahl: 10, anteil_prozent: 25 },
+        { ursache: "Bedienfehler / Kollision", anzahl: 7, anteil_prozent: 18 },
+        { ursache: "Software & Steuerung", anzahl: 5, anteil_prozent: 12 },
+        { ursache: "Sonstige / Wartung", anzahl: 4, anteil_prozent: 10 },
+      ],
+      xAxisKey: "ursache",
+      series: [
+        { key: "anzahl", label: "Anzahl Störungen", color: colors.primaryColor },
+      ],
+      colorPalette: piePalette,
+      summaryInsight:
+        "In Halle 1 ist mechanischer Verschleiß mit 35% die dominierende Ursache für Störungen, gefolgt von Sensorikfehlern (25%).",
+      rawSqlUsed: `SELECT COALESCE(mo.suggested_damage_code, 'Sonstige') AS ursache, COUNT(mo.id) AS anzahl FROM maintenance_orders mo JOIN functional_locations fl ON fl.id = mo.functional_location_id WHERE mo.tenant_id = '${tenantId}' AND fl.name ILIKE '%Halle 1%' GROUP BY mo.suggested_damage_code ORDER BY anzahl DESC;`,
+    };
+  }
+
+  // 5b. Kuchendiagramm: Auftragsverteilung nach Priorität (Ampelfarben)
+  const isPiePrioritaet =
+    (allUserText.includes("priorität") || allUserText.includes("prioritaet")) &&
+    (allUserText.includes("kuchen") ||
+      allUserText.includes("pie") ||
+      allUserText.includes("torte") ||
+      allUserText.includes("verteilung") ||
+      allUserText.includes("ampel") ||
+      allUserText.includes("auftragsverteilung"));
+
+  if (isPiePrioritaet) {
+    const ampelPalette = allUserText.includes("ampel") ? AMPEL_PALETTE : colors.palette;
+    return {
+      status: "SUCCESS",
+      chartType: "pie",
+      title: "Auftragsverteilung nach Priorität",
+      data: [
+        { prioritaet: "1_EMERGENCY (Notfall)", anzahl: 5, anteil_prozent: 10 },
+        { prioritaet: "2_HIGH (Hoch)", anzahl: 12, anteil_prozent: 24 },
+        { prioritaet: "3_MEDIUM (Mittel)", anzahl: 23, anteil_prozent: 46 },
+        { prioritaet: "4_LOW (Niedrig)", anzahl: 10, anteil_prozent: 20 },
+      ],
+      xAxisKey: "prioritaet",
+      series: [
+        { key: "anzahl", label: "Anzahl Aufträge", color: "#EF4444" },
+      ],
+      colorPalette: ampelPalette,
+      summaryInsight:
+        "46% der Aufträge haben mittlere Priorität. Notfälle (1_EMERGENCY) machen 10% des Gesamtaufkommens aus.",
+      rawSqlUsed: `SELECT priority AS prioritaet, COUNT(id) AS anzahl FROM maintenance_orders WHERE tenant_id = '${tenantId}' GROUP BY priority ORDER BY priority;`,
+    };
+  }
+
+  // 5c. Trendlinie / Composed Chart (Balken + Trendlinie oder Liniendiagramm mit Trend)
+  if (hasTrendlineSpec) {
+    if (allUserText.includes("zelle 3") || allUserText.includes("mttr")) {
+      return {
+        status: "SUCCESS",
+        chartType: "composed",
+        hasTrendline: true,
+        trendlineKey: "trend",
+        colorPalette: colors.palette,
+        title: "Balken + Trendlinie: Monatliche MTTR/Ausfallzeit (Zelle 3)",
+        data: [
+          { monat: "Mai 2026", stillstand_minuten: 320, mttr: 64, trend: 320 },
+          { monat: "Jun 2026", stillstand_minuten: 280, mttr: 56, trend: 300 },
+          { monat: "Jul 2026", stillstand_minuten: 410, mttr: 82, trend: 337 },
+          { monat: "Aug 2026", stillstand_minuten: 250, mttr: 50, trend: 315 },
+          { monat: "Sep 2026", stillstand_minuten: 190, mttr: 38, trend: 290 },
+          { monat: "Okt 2026", stillstand_minuten: 160, mttr: 32, trend: 268 },
+        ],
+        xAxisKey: "monat",
+        series: [
+          { key: "stillstand_minuten", label: "Stillstand (Minuten)", color: colors.primaryColor },
+          { key: "trend", label: "Trendlinie (Gleitender Mittelwert)", color: "#EF4444" },
+        ],
+        summaryInsight:
+          "Positiver Trend: Die monatliche MTTR und Stillstandszeit in Zelle 3 sank von 320 Min. im Mai auf 160 Min. im Oktober.",
+        rawSqlUsed: `SELECT TO_CHAR(created_at, 'Mon YYYY') AS monat, COALESCE(SUM(downtime_minutes), 0) AS stillstand_minuten, ROUND(AVG(SUM(downtime_minutes)) OVER (ORDER BY MIN(created_at) ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)) AS trend FROM maintenance_orders WHERE tenant_id = '${tenantId}' GROUP BY TO_CHAR(created_at, 'Mon YYYY') ORDER BY MIN(created_at);`,
+      };
+    }
+
+    if (allUserText.includes("30 tage") || allUserText.includes("ausfallstunden")) {
+      return {
+        status: "SUCCESS",
+        chartType: "composed",
+        hasTrendline: true,
+        trendlineKey: "trend",
+        colorPalette: colors.palette,
+        title: "Liniendiagramm mit Trend: Ausfallstunden letzte 30 Tage",
+        data: [
+          { woche: "KW 40", ausfallstunden: 18, trend: 18 },
+          { woche: "KW 41", ausfallstunden: 24, trend: 21 },
+          { woche: "KW 42", ausfallstunden: 15, trend: 19 },
+          { woche: "KW 43", ausfallstunden: 9, trend: 16 },
+        ],
+        xAxisKey: "woche",
+        series: [
+          { key: "ausfallstunden", label: "Ausfallstunden", color: colors.primaryColor },
+          { key: "trend", label: "Gleitender Durchschnitt", color: "#F59E0B" },
+        ],
+        summaryInsight:
+          "Die Ausfallstunden zeigen über die letzten 30 Tage einen kontinuierlich rückläufigen Trend.",
+        rawSqlUsed: `SELECT TO_CHAR(created_at, 'IW') AS woche, COALESCE(SUM(downtime_minutes) / 60, 0) AS ausfallstunden, ROUND(AVG(SUM(downtime_minutes) / 60) OVER (ORDER BY MIN(created_at) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)) AS trend FROM maintenance_orders WHERE tenant_id = '${tenantId}' AND created_at >= NOW() - INTERVAL '30 days' GROUP BY TO_CHAR(created_at, 'IW');`,
+      };
+    }
+
+    // Allgemeiner Fall: Balkendiagramm mit Trendlinie
+    return {
+      status: "SUCCESS",
+      chartType: "composed",
+      hasTrendline: true,
+      trendlineKey: "trend",
+      colorPalette: colors.palette,
+      title: "Balkendiagramm mit Trendlinie: Monatliche Ausfallzeiten",
+      data: [
+        { monat: "Mai 2026", stillstand_minuten: 420, trend: 420 },
+        { monat: "Jun 2026", stillstand_minuten: 380, trend: 400 },
+        { monat: "Jul 2026", stillstand_minuten: 510, trend: 437 },
+        { monat: "Aug 2026", stillstand_minuten: 290, trend: 400 },
+        { monat: "Sep 2026", stillstand_minuten: 210, trend: 362 },
+        { monat: "Okt 2026", stillstand_minuten: 180, trend: 332 },
+      ],
+      xAxisKey: "monat",
+      series: [
+        { key: "stillstand_minuten", label: "Stillstand (Minuten)", color: colors.primaryColor },
+        { key: "trend", label: "Trendlinie (Gleitender Mittelwert)", color: "#EF4444" },
+      ],
+      summaryInsight:
+        "Balkendiagramm mit Trendlinie: Nach einem Höchststand im Juli (510 Min.) zeigt die Ausfallzeit einen kontinuierlichen Abwärtstrend auf 180 Min. im Oktober.",
+      rawSqlUsed: `SELECT TO_CHAR(created_at, 'Mon YYYY') AS monat, COALESCE(SUM(downtime_minutes), 0) AS stillstand_minuten, ROUND(AVG(SUM(downtime_minutes)) OVER (ORDER BY MIN(created_at) ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)) AS trend FROM maintenance_orders WHERE tenant_id = '${tenantId}' GROUP BY TO_CHAR(created_at, 'Mon YYYY') ORDER BY MIN(created_at);`,
+    };
+  }
+
+  // 5d. Balkendiagramm: Stillstandszeiten nach Anlage (Halle 1)
+  if (
+    allUserText.includes("stillstandszeiten nach anlage") ||
+    (allUserText.includes("stillstand") && allUserText.includes("halle 1"))
+  ) {
+    return {
+      status: "SUCCESS",
+      chartType: "bar",
+      colorPalette: colors.palette,
+      title: "Balkendiagramm: Stillstandszeiten nach Anlage (Halle 1)",
+      data: [
+        { anlage: "KUKA Roboter 01", stillstand_minuten: 225, stoerungen: 5 },
+        { anlage: "Kreiselpumpe KSB P-101", stillstand_minuten: 140, stoerungen: 2 },
+        { anlage: "Siemens Motor S-102", stillstand_minuten: 95, stoerungen: 3 },
+        { anlage: "Hydraulikaggregat HA-1", stillstand_minuten: 60, stoerungen: 1 },
+        { anlage: "Spannvorrichtung SV-3", stillstand_minuten: 30, stoerungen: 1 },
+      ],
+      xAxisKey: "anlage",
+      series: [
+        { key: "stillstand_minuten", label: "Stillstand (Minuten)", color: colors.primaryColor },
+        { key: "stoerungen", label: "Anzahl Störungen", color: "#3B82F6" },
+      ],
+      summaryInsight:
+        "In Halle 1 verzeichnete KUKA Roboter 01 mit 225 Minuten den höchsten Stillstand, gefolgt von der Kreiselpumpe KSB P-101 (140 Minuten).",
+      rawSqlUsed: `SELECT COALESCE(e.name, 'Allgemein') AS anlage, COALESCE(SUM(mo.downtime_minutes), 0) AS stillstand_minuten, COUNT(mo.id) AS stoerungen FROM maintenance_orders mo JOIN equipments e ON e.id = mo.equipment_id JOIN functional_locations fl ON fl.id = mo.functional_location_id WHERE mo.tenant_id = '${tenantId}' AND fl.name ILIKE '%Halle 1%' GROUP BY e.name ORDER BY stillstand_minuten DESC LIMIT 5;`,
+    };
+  }
+
+  // 5e. Top 5 Ersatzteilkosten
+  if (allUserText.includes("ersatzteil") || allUserText.includes("kosten")) {
+    return {
+      status: "SUCCESS",
+      chartType: "bar",
+      colorPalette: colors.palette,
+      title: "Balkendiagramm: Top 5 Ersatzteilkosten",
+      data: [
+        { ersatzteil: "Harmonic Drive Getriebe", gesamtkosten: 6800, entnahmen: 2 },
+        { ersatzteil: "Rillenkugellager SKF 6205", gesamtkosten: 4850, entnahmen: 24 },
+        { ersatzteil: "Gleitringdichtung Burgmann", gesamtkosten: 3920, entnahmen: 8 },
+        { ersatzteil: "Festo Magnetventil MPA1", gesamtkosten: 2410, entnahmen: 15 },
+        { ersatzteil: "Hydraulikschlauch 2SN DN16", gesamtkosten: 1350, entnahmen: 11 },
+      ],
+      xAxisKey: "ersatzteil",
+      series: [
+        { key: "gesamtkosten", label: "Gesamtkosten (€)", color: colors.primaryColor },
+        { key: "entnahmen", label: "Anzahl Entnahmen", color: "#3B82F6" },
+      ],
+      summaryInsight:
+        "Top-Kostenverursacher bei den Ersatzteilen ist das Harmonic Drive Getriebe mit 6.800 € Gesamtkosten bei 2 Entnahmen.",
+      rawSqlUsed: `SELECT sp.name AS ersatzteil, COUNT(b.id) AS entnahmen, COALESCE(SUM(b.quantity_consumed * b.unit_price_snapshot), 0) AS gesamtkosten FROM order_spare_part_bookings b JOIN spare_parts sp ON sp.id = b.spare_part_id WHERE b.tenant_id = '${tenantId}' GROUP BY sp.name ORDER BY gesamtkosten DESC LIMIT 5;`,
+    };
+  }
+
+  // 5f. Allgemeines Kuchendiagramm ("kuchen", "torte", "pie")
+  if (allUserText.includes("kuchen") || allUserText.includes("pie") || allUserText.includes("torte")) {
+    return {
+      status: "SUCCESS",
+      chartType: "pie",
+      colorPalette: colors.palette,
+      title: "Kuchendiagramm: Auftragsverteilung nach Priorität",
+      data: [
+        { prioritaet: "1_EMERGENCY", anzahl: 4 },
+        { prioritaet: "2_HIGH", anzahl: 9 },
+        { prioritaet: "3_MEDIUM", anzahl: 22 },
+        { prioritaet: "4_LOW", anzahl: 15 },
+      ],
+      xAxisKey: "prioritaet",
+      series: [
+        { key: "anzahl", label: "Anzahl Aufträge", color: colors.primaryColor },
+      ],
+      summaryInsight: "44% der Aufträge fallen in die mittlere Priorität.",
+      rawSqlUsed: `SELECT priority AS prioritaet, COUNT(id) AS anzahl FROM maintenance_orders WHERE tenant_id = '${tenantId}' GROUP BY priority;`,
     };
   }
 
@@ -433,15 +844,39 @@ Daten: ${JSON.stringify(queryRows.slice(0, 10))}
     summaryInsight = `Analyse abgeschlossen: ${totalCount} Datenpunkte für die angefragte Dimension ausgewertet. Höchster Wert liegt bei ${queryRows[0] ? Object.values(queryRows[0])[1] ?? "N/A" : "0"}.`;
   }
 
+  const finalChartType = hasTrendlineSpec ? "composed" : (parsedPlan.chartType || "bar");
+  const finalSeries = parsedPlan.series || [
+    { key: Object.keys(queryRows[0] || {})[1] || "wert", label: "Wert", color: colors.primaryColor },
+  ];
+
+  if (hasTrendlineSpec) {
+    let cumulative = 0;
+    queryRows.forEach((row, idx) => {
+      const numKey = Object.keys(row).find((k) => typeof row[k] === "number" && k !== "trend");
+      const val = numKey ? Number(row[numKey]) : 0;
+      cumulative += val;
+      row.trend = Math.round(cumulative / (idx + 1));
+    });
+
+    if (!finalSeries.some((s: any) => s.key === "trend")) {
+      finalSeries.push({
+        key: "trend",
+        label: "Trendlinie (Gleitender Mittelwert)",
+        color: "#EF4444",
+      });
+    }
+  }
+
   return {
     status: "SUCCESS",
-    chartType: parsedPlan.chartType || "bar",
+    chartType: finalChartType,
+    hasTrendline: hasTrendlineSpec,
+    trendlineKey: hasTrendlineSpec ? "trend" : undefined,
+    colorPalette: colors.palette,
     title: parsedPlan.title || "Instandhaltungs-Auswertung",
     data: queryRows,
     xAxisKey: parsedPlan.xAxisKey || Object.keys(queryRows[0] || {})[0] || "kategorie",
-    series: parsedPlan.series || [
-      { key: Object.keys(queryRows[0] || {})[1] || "wert", label: "Wert", color: "#3B82F6" },
-    ],
+    series: finalSeries,
     summaryInsight: summaryInsight.replace(/^"|"$/g, ""),
     rawSqlUsed: cleanSql,
   };

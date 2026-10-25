@@ -25,6 +25,15 @@ Der schnellste Weg zur Erfassung einer Störung führt über das zentrale **Sing
      /orders/new?title=...&description=...&priority=...&equipmentId=...
      ```
 
+### 1.1 Analytische Diagrammerstellung & Klärungsdialog in der Omni-Bar (`ANALYTICS_CHART`)
+
+Neben operativen Störungsmeldungen dient die zentrale Omni-Bar auch als intelligenter **Prompt-to-Chart Assistent**:
+- **Freitext-Diagrammanfragen:** Eingaben wie *„Zeige mir ein Diagramm zu den Ausfallzeiten“*, *„Monatlicher Trend der Störungen“* oder *„Erstelle ein Balkendiagramm“* werden automatisch als `ANALYTICS_CHART` geroutet.
+- **Interaktiver Klärungsdialog für Diagramme:** Sind wesentliche Parameter unvollständig (z. B. bei reinem *„Erstelle ein Diagramm“*), schaltet das System in den geführten Klärungsdialog und fragt gezielt nach den 5 Dimensionen: **Diagrammtyp** (Balken, Linie, Kuchen), **Werte/Kennzahlen**, **Bereich/Maschine**, **Trendlinie** und **Farben** (Ampelschema vs. Standardfarben).
+- **1-Klick-Auswahlchips:** Nutzer können direkt per Klick vorgefertigte Kombinationen auswählen (z. B. *„Liniendiagramm mit Trendlinie: Störungen letzte 30 Tage“* oder *„Kreisdiagramm: Störungen nach Priorität (Ampelfarben)“*).
+- **Direkt-Aktionen am Diagramm:** Jedes gerenderte Recharts-Diagramm bietet Schnellaktionen für **Favorisieren (`[⭐ Zu Favoriten]`)**, **Vergrößern (`[⛶ Vergrößern]`)**, **Tabellen-Umschaltung (`[📋 Als Tabelle]`)** und **Multi-Format-Exporte (`[📥 Exportieren]` als PDF/PNG)**.
+- *Ausführliche Dokumentation:* Siehe [`docs/05-ai-copilot-analytics.md`](05-ai-copilot-analytics.md#36-interaktiver-diagramm-assistent--klärungsdialog-clarification-loop).
+
 ---
 
 ## 2. Dual-Mode Erfassungsmaske (`/orders/new`)

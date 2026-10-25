@@ -460,5 +460,173 @@ describe("Conversational Single-Input Copilot Intent Recognition & Clarification
         expect(result.widget.filters).toBeDefined();
       }
     });
+
+    describe("Interactive Diagram Clarification Loop (Clarification Loop für Diagramme)", () => {
+      it("a) should return NEEDS_CLARIFICATION with suggested options for unspecific diagram requests", async () => {
+        const unspecificQueries = [
+          "erstelle ein Diagramm",
+          "Diagramm",
+          "Kuchendiagramm",
+          "Auswertung anzeigen",
+        ];
+
+        for (const prompt of unspecificQueries) {
+          const result = await executeSingleInputCopilotAction({ prompt });
+          expect(result.needsClarification).toBe(true);
+          expect(result.clarificationQuestion).toBe(
+            "Gerne! Welches Diagramm möchtest du erstellen? Bitte wähle Diagrammtyp, Kennzahl und Bereich:"
+          );
+          expect(result.clarificationOptions).toBeInstanceOf(Array);
+          expect(result.clarificationOptions!.length).toBe(6);
+
+          const expectedOptions = [
+            "🥧 Kuchendiagramm: Störungsursachen (Halle 1)",
+            "📊 Balkendiagramm: Stillstandszeiten nach Anlage (Halle 1)",
+            "📈 Liniendiagramm mit Trend: Ausfallstunden letzte 30 Tage",
+            "🥧 Kuchendiagramm: Auftragsverteilung nach Priorität (Ampelfarben)",
+            "📊 Balken + Trendlinie: Monatliche MTTR/Ausfallzeit (Zelle 3)",
+            "💰 Balkendiagramm: Top 5 Ersatzteilkosten",
+          ];
+
+          expectedOptions.forEach((expectedLabel) => {
+            const found = result.clarificationOptions!.find((opt) => opt.label === expectedLabel);
+            expect(found, `Expected option "${expectedLabel}" not found in ${prompt}`).toBeDefined();
+            expect(found?.field).toBe("general");
+          });
+        }
+      });
+
+      it("b) should return chartType: 'pie' when specifying 'Kuchendiagramm Störungen Halle 1'", async () => {
+        const result = await executeSingleInputCopilotAction({
+          prompt: "Kuchendiagramm Störungen Halle 1",
+          conversationHistory: [
+            { role: "user", content: "erstelle ein Diagramm" },
+            {
+              role: "assistant",
+              content:
+                "Gerne! Welches Diagramm möchtest du erstellen? Bitte wähle Diagrammtyp, Kennzahl und Bereich:",
+            },
+          ],
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.type).toBe("chart_view");
+        expect(result.chartType).toBe("pie");
+        expect(result.xAxisKey).toBe("ursache");
+        expect(result.series).toBeInstanceOf(Array);
+        expect(result.series!.length).toBeGreaterThanOrEqual(1);
+        expect(result.colorPalette).toEqual(["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"]);
+        expect(result.summaryInsight).toBeDefined();
+
+        expect(result.widget?.type).toBe("chart_view");
+        if (result.widget?.type === "chart_view") {
+          expect(result.widget.chartType).toBe("pie");
+          expect(result.widget.colorPalette).toEqual(["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"]);
+          expect(result.widget.xAxisKey).toBe("ursache");
+          expect(result.widget.series).toBeInstanceOf(Array);
+          expect(result.widget.summaryInsight).toBeDefined();
+        }
+      });
+
+      it("b) should return chartType: 'pie' when prompt is 'Kuchendiagramm Störungen Halle 1' directly", async () => {
+        const result = await executeSingleInputCopilotAction({
+          prompt: "Kuchendiagramm Störungen Halle 1",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.type).toBe("chart_view");
+        expect(result.chartType).toBe("pie");
+        expect(result.colorPalette).toEqual(["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"]);
+      });
+
+      it("c) should return hasTrendline: true and chartType: 'composed' when specifying 'Balkendiagramm mit Trendlinie'", async () => {
+        const result = await executeSingleInputCopilotAction({
+          prompt: "Balkendiagramm mit Trendlinie",
+          conversationHistory: [
+            { role: "user", content: "erstelle ein Diagramm" },
+            {
+              role: "assistant",
+              content:
+                "Gerne! Welches Diagramm möchtest du erstellen? Bitte wähle Diagrammtyp, Kennzahl und Bereich:",
+            },
+          ],
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.type).toBe("chart_view");
+        expect(result.hasTrendline).toBe(true);
+        expect(result.chartType).toBe("composed");
+        expect(result.trendlineKey).toBe("trend");
+        expect(result.xAxisKey).toBe("monat");
+        expect(result.series).toBeInstanceOf(Array);
+        expect(result.series!.some((s) => s.key === "trend")).toBe(true);
+        expect(result.summaryInsight).toBeDefined();
+        expect(result.colorPalette).toBeDefined();
+
+        expect(result.widget?.type).toBe("chart_view");
+        if (result.widget?.type === "chart_view") {
+          expect(result.widget.hasTrendline).toBe(true);
+          expect(result.widget.chartType).toBe("composed");
+          expect(result.widget.trendlineKey).toBe("trend");
+          expect(result.widget.xAxisKey).toBe("monat");
+          expect(result.widget.series).toBeInstanceOf(Array);
+          expect(result.widget.summaryInsight).toBeDefined();
+          expect(result.widget.colorPalette).toBeDefined();
+        }
+      });
+
+      it("c) should return hasTrendline: true and chartType: 'composed' when prompt is 'Balkendiagramm mit Trendlinie' directly", async () => {
+        const result = await executeSingleInputCopilotAction({
+          prompt: "Balkendiagramm mit Trendlinie",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.type).toBe("chart_view");
+        expect(result.hasTrendline).toBe(true);
+        expect(result.chartType).toBe("composed");
+        expect(result.trendlineKey).toBe("trend");
+      });
+
+      it("should resolve clarification option with traffic light colors for priority pie chart", async () => {
+        const result = await executeSingleInputCopilotAction({
+          prompt: "🥧 Kuchendiagramm: Auftragsverteilung nach Priorität (Ampelfarben)",
+          conversationHistory: [
+            { role: "user", content: "Diagramm" },
+            {
+              role: "assistant",
+              content:
+                "Gerne! Welches Diagramm möchtest du erstellen? Bitte wähle Diagrammtyp, Kennzahl und Bereich:",
+            },
+          ],
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.type).toBe("chart_view");
+        expect(result.chartType).toBe("pie");
+        expect(result.colorPalette).toEqual(["#EF4444", "#F59E0B", "#10B981", "#3B82F6", "#8B5CF6"]);
+        expect(result.xAxisKey).toBe("prioritaet");
+      });
+
+      it("should resolve clarification option for Balken + Trendlinie MTTR Zelle 3", async () => {
+        const result = await executeSingleInputCopilotAction({
+          prompt: "📊 Balken + Trendlinie: Monatliche MTTR/Ausfallzeit (Zelle 3)",
+          conversationHistory: [
+            { role: "user", content: "erstelle ein Diagramm" },
+            {
+              role: "assistant",
+              content:
+                "Gerne! Welches Diagramm möchtest du erstellen? Bitte wähle Diagrammtyp, Kennzahl und Bereich:",
+            },
+          ],
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.type).toBe("chart_view");
+        expect(result.chartType).toBe("composed");
+        expect(result.hasTrendline).toBe(true);
+        expect(result.trendlineKey).toBe("trend");
+        expect(result.series?.some((s) => s.key === "trend")).toBe(true);
+      });
+    });
   });
 });

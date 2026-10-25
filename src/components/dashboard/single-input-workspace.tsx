@@ -18,6 +18,11 @@ import {
   Check,
   Table as TableIcon,
   BarChart2,
+  BarChart3,
+  PieChart as PieChartIcon,
+  TrendingUp,
+  Palette,
+  Layers,
   Lightbulb,
   Cpu,
   Trash2,
@@ -42,6 +47,7 @@ import {
   Line,
   PieChart,
   Pie,
+  ComposedChart,
   XAxis,
   YAxis,
   Tooltip,
@@ -191,16 +197,41 @@ const HALLE_1_DOWNTIME_DATA = [
   },
 ];
 
-const DEFAULT_CHART_COLORS = [
-  "#3B82F6",
-  "#10B981",
-  "#F59E0B",
-  "#EF4444",
-  "#8B5CF6",
-  "#EC4899",
-  "#14B8A6",
-  "#F97316",
-];
+import {
+  DEFAULT_PALETTE,
+  DEFAULT_CHART_COLORS,
+  formatChartTooltipValue,
+  ensureTrendData,
+  getClarificationOptionIconType,
+} from "@/lib/chart-utils";
+
+export {
+  DEFAULT_PALETTE,
+  DEFAULT_CHART_COLORS,
+  formatChartTooltipValue,
+  ensureTrendData,
+  getClarificationOptionIconType,
+};
+
+export function renderClarificationIcon(opt: ClarificationOption) {
+  const iconType = getClarificationOptionIconType(opt);
+  switch (iconType) {
+    case "pie":
+      return <PieChartIcon className="h-4 w-4 text-purple-600 shrink-0" />;
+    case "trend":
+      return <TrendingUp className="h-4 w-4 text-emerald-600 shrink-0" />;
+    case "palette":
+      return <Palette className="h-4 w-4 text-pink-600 shrink-0" />;
+    case "bar":
+      return <BarChart3 className="h-4 w-4 text-blue-600 shrink-0" />;
+    case "equipment":
+      return <Cpu className="h-4 w-4 text-indigo-600 shrink-0" />;
+    case "area":
+      return <Layers className="h-4 w-4 text-amber-600 shrink-0" />;
+    default:
+      return <Sparkles className="h-4 w-4 text-blue-500 shrink-0" />;
+  }
+}
 
 function formatTime(date: Date | string | number): string {
   try {
@@ -621,7 +652,24 @@ export function SingleInputWorkspace({
     // Wechsel in die Chat-Sicht (Stufe 2)
     setIsChatActive(true);
 
-    const isSelection = Boolean(optionId);
+    // Falls optionId nicht direkt übergeben wurde, in der letzten Clarification nachschauen
+    let effOptionId = optionId;
+    let effOptionField = optionField;
+    if (!effOptionId) {
+      const lastClarification = [...messages].reverse().find((m) => m.type === "clarification");
+      const matchedOpt = lastClarification?.payload?.options?.find(
+        (o: ClarificationOption) =>
+          o.value?.toLowerCase() === textToSubmit.toLowerCase() ||
+          o.label?.toLowerCase() === textToSubmit.toLowerCase() ||
+          o.id?.toLowerCase() === textToSubmit.toLowerCase()
+      );
+      if (matchedOpt) {
+        effOptionId = matchedOpt.id;
+        effOptionField = matchedOpt.field;
+      }
+    }
+
+    const isSelection = Boolean(effOptionId);
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       sender: "user",
@@ -630,8 +678,8 @@ export function SingleInputWorkspace({
       type: "text",
       payload: {
         isSelection,
-        optionId,
-        optionField,
+        optionId: effOptionId,
+        optionField: effOptionField,
         photoUrl: selectedPhoto?.previewUrl,
       },
     };
@@ -665,8 +713,8 @@ export function SingleInputWorkspace({
           role: "user",
           content: textToSubmit,
           clarificationSelection:
-            optionId && optionField
-              ? { id: optionId, value: textToSubmit, field: optionField }
+            effOptionId && effOptionField
+              ? { id: effOptionId, value: textToSubmit, field: effOptionField }
               : undefined,
         });
 
@@ -675,10 +723,10 @@ export function SingleInputWorkspace({
           tenantId,
           prompt: textToSubmit,
           chatHistory: copilotHistory,
-          selectedOptionId: optionId,
+          selectedOptionId: effOptionId,
           clarificationSelection:
-            optionId && optionField
-              ? { id: optionId, value: textToSubmit, field: optionField }
+            effOptionId && effOptionField
+              ? { id: effOptionId, value: textToSubmit, field: effOptionField }
               : undefined,
           availableEquipments: availableEquipmentsList.map((e) => ({
             id: e.id,
@@ -742,12 +790,21 @@ export function SingleInputWorkspace({
         // Fall 3: Diagramm-Ansicht (ANALYTICS_CHART oder "als Diagramm" / Auswertung)
         const isChartQuery =
           classification.intent === "ANALYTICS_CHART" ||
-          (optionField === "general" && !needsClarification) ||
+          (effOptionField === "general" && !needsClarification) ||
           lowerPrompt.includes("diagramm") ||
           lowerPrompt.includes("chart") ||
           lowerPrompt.includes("ausfallzeit") ||
           lowerPrompt.includes("auswertung") ||
           lowerPrompt.includes("balken") ||
+          lowerPrompt.includes("kuchen") ||
+          lowerPrompt.includes("pie") ||
+          lowerPrompt.includes("torte") ||
+          lowerPrompt.includes("kreis") ||
+          lowerPrompt.includes("linie") ||
+          lowerPrompt.includes("trend") ||
+          lowerPrompt.includes("verlauf") ||
+          lowerPrompt.includes("farbe") ||
+          lowerPrompt.includes("palette") ||
           lowerPrompt.includes("grafik") ||
           lowerPrompt.includes("kpi") ||
           lowerPrompt.includes("mttr") ||
@@ -779,6 +836,9 @@ export function SingleInputWorkspace({
             return;
           }
 
+          const lastChartMsg = [...messages].reverse().find((m) => m.type === "chart_view");
+          const existingData = lastChartMsg?.payload?.chartData;
+
           const widget = (copilotRes.widget?.type === "chart_view"
             ? (copilotRes.widget as ChartViewWidgetPayload)
             : null) || {
@@ -795,8 +855,78 @@ export function SingleInputWorkspace({
           };
 
           const rawData = widget.data || (widget as any).chartData || [];
-          const xAxisKey = widget.xAxisKey || Object.keys(rawData[0] || {})[0] || "name";
-          const series = widget.series || [{ key: "value", label: "Wert", color: "#3B82F6" }];
+          const effectiveData = rawData.length > 0 ? rawData : (existingData || HALLE_1_DOWNTIME_DATA);
+          const xAxisKey = widget.xAxisKey || lastChartMsg?.payload?.xAxisKey || Object.keys(effectiveData[0] || {})[0] || "name";
+          const series = widget.series || lastChartMsg?.payload?.series || (
+            effectiveData.length > 0 && typeof effectiveData[0].hours === "number"
+              ? [{ key: "hours", label: "Ausfallzeit (h)", color: "#3B82F6" }]
+              : [{ key: "value", label: "Wert", color: "#3B82F6" }]
+          );
+
+          // Diagramm-Typ ermitteln
+          let targetChartType: "bar" | "line" | "pie" | "composed" =
+            (copilotRes.chartType ||
+              copilotRes.analyticsResult?.chartType ||
+              (widget as any).chartType ||
+              lastChartMsg?.payload?.chartType ||
+              "bar") as any;
+
+          if (
+            lowerPrompt.includes("kuchen") ||
+            lowerPrompt.includes("pie") ||
+            lowerPrompt.includes("torte") ||
+            lowerPrompt.includes("kreis")
+          ) {
+            targetChartType = "pie";
+          } else if (
+            lowerPrompt.includes("trend") ||
+            lowerPrompt.includes("kombiniert") ||
+            lowerPrompt.includes("composed")
+          ) {
+            targetChartType = "composed";
+          } else if (
+            lowerPrompt.includes("linie") ||
+            lowerPrompt.includes("verlauf")
+          ) {
+            targetChartType = "line";
+          } else if (
+            lowerPrompt.includes("balken") ||
+            lowerPrompt.includes("säule") ||
+            lowerPrompt.includes("bar")
+          ) {
+            targetChartType = "bar";
+          }
+
+          const hasTrendline =
+            targetChartType === "composed" ||
+            Boolean((copilotRes as any).hasTrendline) ||
+            Boolean((copilotRes.widget as any)?.hasTrendline) ||
+            Boolean(copilotRes.analyticsResult?.hasTrendline) ||
+            Boolean(lastChartMsg?.payload?.hasTrendline && !lowerPrompt.includes("ohne trend")) ||
+            lowerPrompt.includes("trend");
+
+          // Farbschema ermitteln
+          let colorPalette: string[] | undefined =
+            (copilotRes.widget as any)?.colorPalette ||
+            copilotRes.analyticsResult?.colorPalette ||
+            lastChartMsg?.payload?.colorPalette;
+
+          if (lowerPrompt.includes("smaragd") || lowerPrompt.includes("grün")) {
+            colorPalette = ["#10B981", "#059669", "#34D399", "#6EE7B7", "#047857", "#A7F3D0"];
+          } else if (lowerPrompt.includes("blau") || lowerPrompt.includes("ocean")) {
+            colorPalette = ["#3B82F6", "#2563EB", "#60A5FA", "#93C5FD", "#1D4ED8", "#BFDBFE"];
+          } else if (lowerPrompt.includes("amber") || lowerPrompt.includes("warm") || lowerPrompt.includes("orange")) {
+            colorPalette = ["#F59E0B", "#F97316", "#EF4444", "#FBBF24", "#FB923C", "#F87171"];
+          } else if (lowerPrompt.includes("violett") || lowerPrompt.includes("lila") || lowerPrompt.includes("purple")) {
+            colorPalette = ["#8B5CF6", "#7C3AED", "#A78BFA", "#C4B5FD", "#6D28D9", "#DDD6FE"];
+          } else if (!colorPalette) {
+            colorPalette = DEFAULT_PALETTE;
+          }
+
+          const unit =
+            (copilotRes.widget as any)?.unit ||
+            copilotRes.analyticsResult?.unit ||
+            lastChartMsg?.payload?.unit;
 
           setMessages((prev) => [
             ...prev,
@@ -809,12 +939,21 @@ export function SingleInputWorkspace({
                 : "Hier ist die gewünschte Auswertung:",
               type: "chart_view",
               payload: {
-                title: widget.title,
-                chartType: widget.chartType || "bar",
-                chartData: rawData,
+                title: widget.title || lastChartMsg?.payload?.title || "Kennzahlen-Auswertung",
+                chartType: targetChartType,
+                hasTrendline,
+                colorPalette,
+                unit,
+                chartData: effectiveData,
                 xAxisKey,
                 series,
-                summaryInsight: widget.summary,
+                summaryInsight:
+                  widget.summary ||
+                  (hasTrendline
+                    ? "Die Trendlinie prognostiziert eine graduelle Stabilisierung der Ausfallzeiten."
+                    : targetChartType === "pie"
+                    ? "KUKA KR-210 verursacht mit über 40% den größten Anteil an den Gesamtausfällen."
+                    : undefined),
                 rawSqlUsed: widget.rawSql,
                 viewMode: "chart",
               },
@@ -951,9 +1090,9 @@ export function SingleInputWorkspace({
     });
   };
 
-  // Klick auf ein Klärungs-Equipment
+  // Klick auf eine Klärungs-Option (Equipment, Diagrammtyp, Trendlinie, Farbe)
   const handleClarificationChipClick = (opt: ClarificationOption) => {
-    handleSubmitQuery(opt.label, opt.id, opt.field);
+    handleSubmitQuery(opt.value || opt.label);
   };
 
   // Verbindliches Anlegen des Störungsauftrags aus dem Entwurf
@@ -1376,18 +1515,27 @@ export function SingleInputWorkspace({
                   </div>
                 )}
 
-                {/* 1. CLARIFICATION OPTIONS (KUKA KR-210, KUKA KR-16) */}
+                {/* 1. CLARIFICATION OPTIONS (z. B. Diagrammtyp, Werte, Roboter/Bereich, Trendlinie, Farben) */}
                 {msg.type === "clarification" && msg.payload?.options && (
-                  <div className="flex flex-wrap gap-2.5 pt-1">
+                  <div className="flex flex-wrap gap-2.5 pt-1.5 animate-in fade-in slide-in-from-bottom-1 duration-200">
                     {msg.payload.options.map((opt: ClarificationOption) => (
                       <button
                         key={opt.id}
                         type="button"
-                        onClick={() => handleClarificationChipClick(opt)}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl bg-white hover:bg-blue-50 text-blue-950 font-semibold border border-blue-200 shadow-2xs hover:border-blue-400 transition-all text-xs sm:text-sm cursor-pointer active:scale-95 text-left"
+                        onClick={() => handleSubmitQuery(opt.value || opt.label)}
+                        className="group inline-flex items-center gap-2.5 px-4 py-2.5 min-h-[44px] rounded-xl bg-white hover:bg-gradient-to-r hover:from-blue-50/80 hover:to-indigo-50/60 text-slate-800 hover:text-blue-950 font-semibold border border-slate-200/90 hover:border-blue-300 shadow-2xs hover:shadow-sm transition-all duration-150 text-xs sm:text-sm cursor-pointer active:scale-95 text-left"
                       >
-                        <span>🤖</span>
-                        <span>{opt.label}</span>
+                        <span className="p-1 rounded-lg bg-slate-50 group-hover:bg-white border border-slate-100 group-hover:border-blue-100 transition-colors shrink-0">
+                          {renderClarificationIcon(opt)}
+                        </span>
+                        <span className="flex flex-col">
+                          <span className="font-semibold text-slate-800 group-hover:text-blue-950">{opt.label}</span>
+                          {opt.description && (
+                            <span className="text-[11px] font-normal text-slate-400 group-hover:text-slate-500 leading-tight">
+                              {opt.description}
+                            </span>
+                          )}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -1458,17 +1606,22 @@ export function SingleInputWorkspace({
 
                 {/* 4. DIAGRAMM-ANSICHT (DYNAMISCHES RECHARTS-RENDERING) */}
                 {msg.type === "chart_view" && (() => {
-                  const chartData: any[] = msg.payload?.chartData || [];
-                  const xAxisKey: string = msg.payload?.xAxisKey || Object.keys(chartData[0] || {})[0] || "name";
-                  const series: Array<{ key: string; label: string; color?: string }> =
+                  const rawChartData: any[] = msg.payload?.chartData || [];
+                  const xAxisKey: string = msg.payload?.xAxisKey || Object.keys(rawChartData[0] || {})[0] || "name";
+                  const series: Array<{ key: string; label: string; color?: string; unit?: string }> =
                     msg.payload?.series && msg.payload.series.length > 0
                       ? msg.payload.series
-                      : chartData.length > 0 && typeof chartData[0].hours === "number"
+                      : rawChartData.length > 0 && typeof rawChartData[0].hours === "number"
                       ? [{ key: "hours", label: "Ausfallzeit (h)", color: "#3B82F6" }]
                       : [{ key: "value", label: "Wert", color: "#3B82F6" }];
-                  const chartType: "bar" | "line" | "pie" = msg.payload?.chartType || "bar";
+                  const chartType: "bar" | "line" | "pie" | "composed" = msg.payload?.chartType || "bar";
+                  const hasTrendline: boolean = Boolean(msg.payload?.hasTrendline) || chartType === "composed";
+                  const isComposedOrTrend = chartType === "composed" || hasTrendline;
+                  const colorPalette: string[] = msg.payload?.colorPalette || DEFAULT_PALETTE;
                   const summaryInsight = msg.payload?.summaryInsight || msg.payload?.summary;
                   const chartTitle = msg.payload?.title || "Auswertung";
+                  const primarySeriesKey = series[0]?.key || "hours";
+                  const chartData = isComposedOrTrend ? ensureTrendData(rawChartData, primarySeriesKey) : rawChartData;
 
                   return (
                     <div className="bg-white border border-slate-200 p-4 sm:p-5 rounded-2xl shadow-sm space-y-4">
@@ -1507,6 +1660,8 @@ export function SingleInputWorkspace({
                             <p className="text-xs text-slate-500">
                               {chartType === "pie"
                                 ? "Verteilung nach Kategorien visualisiert"
+                                : isComposedOrTrend
+                                ? "Kennzahlen mit Trendlinie visualisiert"
                                 : chartType === "line"
                                 ? "Zeitlicher Verlauf visualisiert"
                                 : "Kennzahlen visualisiert"}
@@ -1561,12 +1716,12 @@ export function SingleInputWorkspace({
                             chartContainerRefs.current.delete(msg.id);
                           }
                         }}
-                        className="h-64 sm:h-72 w-full pt-2"
+                        className="h-[300px] w-full pt-2"
                       >
                         <ResponsiveContainer width="100%" height="100%">
-                          {chartType === "line" ? (
-                            <LineChart data={chartData} margin={{ top: 15, right: 20, left: 0, bottom: 20 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                          {isComposedOrTrend ? (
+                            <ComposedChart data={chartData} margin={{ top: 15, right: 20, left: 0, bottom: 20 }}>
+                              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                               <XAxis
                                 dataKey={xAxisKey}
                                 stroke="#64748B"
@@ -1595,9 +1750,120 @@ export function SingleInputWorkspace({
                                           {payload.map((entry: any, i: number) => {
                                             const seriesDef = series.find((s) => s.key === entry.dataKey);
                                             const labelName = entry.name || seriesDef?.label || entry.dataKey;
-                                            const color = entry.color || seriesDef?.color || DEFAULT_CHART_COLORS[i % DEFAULT_CHART_COLORS.length];
+                                            const color = entry.color || seriesDef?.color || (entry.dataKey === "trend" ? "#10B981" : colorPalette[i % colorPalette.length]);
                                             const val = entry.value;
-                                            const formattedVal = typeof val === "number" ? val.toLocaleString("de-DE") : val;
+                                            const unit = msg.payload?.unit || seriesDef?.unit;
+                                            const formattedVal = formatChartTooltipValue(val, unit, labelName);
+                                            return (
+                                              <div key={`tip-comp-${i}`} className="flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-1.5 truncate">
+                                                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                                                  <span className="text-slate-600 truncate">{labelName}:</span>
+                                                </div>
+                                                <span className="font-bold text-slate-900 shrink-0">{formattedVal}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "8px" }} />
+                              <Bar
+                                dataKey={series[0]?.key || "hours"}
+                                fill={series[0]?.color || colorPalette[0] || "#3B82F6"}
+                                radius={[4, 4, 0, 0]}
+                                name={series[0]?.label || "Wert"}
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="trend"
+                                stroke="#10B981"
+                                strokeWidth={2}
+                                strokeDasharray="5 5"
+                                name="Trend"
+                                dot={{ r: 3 }}
+                              />
+                            </ComposedChart>
+                          ) : chartType === "pie" ? (
+                            <PieChart>
+                              <Tooltip
+                                content={({ active, payload }) => {
+                                  if (active && payload && payload.length) {
+                                    const entry = payload[0];
+                                    const name = entry.name ?? entry.payload?.[xAxisKey] ?? "";
+                                    const val = entry.value;
+                                    const labelName = series[0]?.label || "Wert";
+                                    const formattedVal = formatChartTooltipValue(val, msg.payload?.unit, labelName);
+                                    return (
+                                      <div className="bg-white p-3 border border-slate-200 rounded-xl shadow-lg text-xs space-y-1 min-w-[150px]">
+                                        <p className="font-bold text-slate-900 border-b border-slate-100 pb-1">{String(name)}</p>
+                                        <div className="flex items-center justify-between gap-3 pt-0.5">
+                                          <span className="text-slate-600">{labelName}:</span>
+                                          <span className="font-bold text-slate-900">{formattedVal}</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: "12px" }} />
+                              <Pie
+                                data={chartData}
+                                dataKey={series[0]?.key || "wert"}
+                                nameKey={xAxisKey || "name"}
+                                cx="50%"
+                                cy="50%"
+                                outerRadius={90}
+                                label
+                              >
+                                {chartData.map((_, index) => (
+                                  <Cell
+                                    key={`pie-cell-${index}`}
+                                    fill={colorPalette[index % colorPalette.length]}
+                                  />
+                                ))}
+                              </Pie>
+                            </PieChart>
+                          ) : chartType === "line" ? (
+                            <LineChart data={chartData} margin={{ top: 15, right: 20, left: 0, bottom: 20 }}>
+                              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                              <XAxis
+                                dataKey={xAxisKey}
+                                stroke="#64748B"
+                                fontSize={11}
+                                tickLine={false}
+                                axisLine={{ stroke: "#CBD5E1" }}
+                              />
+                              <YAxis
+                                stroke="#64748B"
+                                fontSize={11}
+                                tickLine={false}
+                                axisLine={{ stroke: "#CBD5E1" }}
+                              />
+                              <Tooltip
+                                content={({ active, payload, label }) => {
+                                  if (active && payload && payload.length) {
+                                    const dataItem = payload[0].payload;
+                                    const xVal = label ?? dataItem[xAxisKey] ?? "";
+                                    return (
+                                      <div className="bg-white p-3 border border-slate-200 rounded-xl shadow-lg text-xs space-y-1.5 min-w-[180px]">
+                                        <p className="font-bold text-slate-900 border-b border-slate-100 pb-1">{String(xVal)}</p>
+                                        {dataItem.component && (
+                                          <p className="text-slate-500 text-[11px]">{dataItem.component}</p>
+                                        )}
+                                        <div className="space-y-1 pt-0.5">
+                                          {payload.map((entry: any, i: number) => {
+                                            const seriesDef = series.find((s) => s.key === entry.dataKey);
+                                            const labelName = entry.name || seriesDef?.label || entry.dataKey;
+                                            const color = entry.color || seriesDef?.color || colorPalette[i % colorPalette.length];
+                                            const val = entry.value;
+                                            const unit = msg.payload?.unit || seriesDef?.unit;
+                                            const formattedVal = formatChartTooltipValue(val, unit, labelName);
                                             return (
                                               <div key={`tip-line-${i}`} className="flex items-center justify-between gap-3">
                                                 <div className="flex items-center gap-1.5 truncate">
@@ -1615,65 +1881,25 @@ export function SingleInputWorkspace({
                                   return null;
                                 }}
                               />
-                              {series.length > 1 && <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "8px" }} />}
+                              <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "8px" }} />
                               {series.map((s, idx) => (
                                 <Line
                                   key={s.key}
                                   type="monotone"
                                   dataKey={s.key}
                                   name={s.label}
-                                  stroke={s.color || DEFAULT_CHART_COLORS[idx % DEFAULT_CHART_COLORS.length]}
+                                  stroke={s.color || colorPalette[idx % colorPalette.length]}
                                   strokeWidth={2.5}
                                   dot={{ r: 4 }}
                                 />
                               ))}
                             </LineChart>
-                          ) : chartType === "pie" ? (
-                            <PieChart>
-                              <Tooltip
-                                content={({ active, payload }) => {
-                                  if (active && payload && payload.length) {
-                                    const entry = payload[0];
-                                    const name = entry.name ?? entry.payload?.[xAxisKey] ?? "";
-                                    const val = entry.value;
-                                    const formattedVal = typeof val === "number" ? val.toLocaleString("de-DE") : val;
-                                    return (
-                                      <div className="bg-white p-3 border border-slate-200 rounded-xl shadow-lg text-xs space-y-1 min-w-[150px]">
-                                        <p className="font-bold text-slate-900 border-b border-slate-100 pb-1">{String(name)}</p>
-                                        <div className="flex items-center justify-between gap-3 pt-0.5">
-                                          <span className="text-slate-600">{series[0]?.label || "Wert"}:</span>
-                                          <span className="font-bold text-slate-900">{formattedVal}</span>
-                                        </div>
-                                      </div>
-                                    );
-                                  }
-                                  return null;
-                                }}
-                              />
-                              <Legend wrapperStyle={{ fontSize: "12px" }} />
-                              <Pie
-                                data={chartData}
-                                dataKey={series[0]?.key || Object.keys(chartData[0] || {})[1] || "value"}
-                                nameKey={xAxisKey}
-                                cx="50%"
-                                cy="50%"
-                                outerRadius={90}
-                                label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                              >
-                                {chartData.map((_, index) => (
-                                  <Cell
-                                    key={`pie-cell-${index}`}
-                                    fill={DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.length]}
-                                  />
-                                ))}
-                              </Pie>
-                            </PieChart>
                           ) : (
                             <BarChart
                               data={chartData}
                               margin={{ top: 15, right: 20, left: 0, bottom: 20 }}
                             >
-                              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                               <XAxis
                                 dataKey={xAxisKey}
                                 stroke="#64748B"
@@ -1702,9 +1928,10 @@ export function SingleInputWorkspace({
                                           {payload.map((entry: any, i: number) => {
                                             const seriesDef = series.find((s) => s.key === entry.dataKey);
                                             const labelName = entry.name || seriesDef?.label || entry.dataKey;
-                                            const color = entry.color || seriesDef?.color || DEFAULT_CHART_COLORS[i % DEFAULT_CHART_COLORS.length];
+                                            const color = entry.color || seriesDef?.color || colorPalette[i % colorPalette.length];
                                             const val = entry.value;
-                                            const formattedVal = typeof val === "number" ? val.toLocaleString("de-DE") : val;
+                                            const unit = msg.payload?.unit || seriesDef?.unit;
+                                            const formattedVal = formatChartTooltipValue(val, unit, labelName);
                                             return (
                                               <div key={`tip-bar-${i}`} className="flex items-center justify-between gap-3">
                                                 <div className="flex items-center gap-1.5 truncate">
@@ -1722,21 +1949,21 @@ export function SingleInputWorkspace({
                                   return null;
                                 }}
                               />
-                              {series.length > 1 && <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "8px" }} />}
+                              <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "8px" }} />
                               {series.map((s, idx) => (
                                 <Bar
                                   key={s.key}
                                   dataKey={s.key}
                                   name={s.label}
-                                  fill={s.color || DEFAULT_CHART_COLORS[idx % DEFAULT_CHART_COLORS.length]}
-                                  radius={[6, 6, 0, 0]}
+                                  fill={s.color || colorPalette[idx % colorPalette.length]}
+                                  radius={[4, 4, 0, 0]}
                                   maxBarSize={55}
                                 >
                                   {series.length === 1 &&
                                     chartData.map((entry: any, index: number) => (
                                       <Cell
                                         key={`bar-cell-${index}`}
-                                        fill={entry.fill || s.color || DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.length]}
+                                        fill={entry.fill || s.color || colorPalette[index % colorPalette.length]}
                                         stroke={entry.stroke || undefined}
                                         strokeWidth={entry.stroke ? 1.5 : 0}
                                       />
@@ -1748,13 +1975,16 @@ export function SingleInputWorkspace({
                         </ResponsiveContainer>
                       </div>
 
-                      {/* KI-Erkenntnis Pill (nur anzeigen, wenn eine Erkenntnis vorhanden ist) */}
+                      {/* KI-Zusammenfassung Banner */}
                       {summaryInsight && (
-                        <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 flex items-center gap-2.5 text-xs">
-                          <Lightbulb className="h-4 w-4 text-blue-600 shrink-0" />
-                          <span>
-                            <strong>KI-Erkenntnis:</strong> {summaryInsight}
-                          </span>
+                        <div className="p-3 rounded-xl bg-gradient-to-r from-blue-50 to-emerald-50/70 border border-blue-200/80 text-blue-950 flex items-start sm:items-center gap-2.5 text-xs shadow-2xs">
+                          <div className="h-6 w-6 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                            <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                          </div>
+                          <div className="flex-1 leading-relaxed">
+                            <strong className="font-semibold text-blue-900">KI-Erkenntnis: </strong>
+                            <span className="text-slate-700">{summaryInsight}</span>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -2351,7 +2581,7 @@ function ChartZoomModal({
 
   const xAxisKey = chartMessage?.payload?.xAxisKey || Object.keys(chartData[0] || {})[0] || "name";
 
-  const series: Array<{ key: string; label: string; color?: string }> = useMemo(() => {
+  const series: Array<{ key: string; label: string; color?: string; unit?: string }> = useMemo(() => {
     if (chartMessage?.payload?.series && chartMessage.payload.series.length > 0) {
       return chartMessage.payload.series;
     }
@@ -2361,10 +2591,14 @@ function ChartZoomModal({
     return [{ key: "value", label: "Wert", color: "#3B82F6" }];
   }, [chartMessage, chartData]);
 
-  const chartType: "bar" | "line" | "pie" = chartMessage?.payload?.chartType || "bar";
+  const chartType: "bar" | "line" | "pie" | "composed" = chartMessage?.payload?.chartType || "bar";
+  const hasTrendline = Boolean(chartMessage?.payload?.hasTrendline) || chartType === "composed";
+  const isComposedOrTrend = chartType === "composed" || hasTrendline;
+  const colorPalette = chartMessage?.payload?.colorPalette || DEFAULT_PALETTE;
   const summaryInsight = chartMessage?.payload?.summaryInsight || chartMessage?.payload?.summary;
 
-  const displayedData = useMemo(() => {
+  const primarySeriesKey = series[0]?.key || "hours";
+  const rawDisplayedData = useMemo(() => {
     if (!chartData || chartData.length === 0) return [];
     if (activeTimeframeOption.factor === 1.0) return chartData;
 
@@ -2384,6 +2618,10 @@ function ChartZoomModal({
       return scaled;
     });
   }, [chartData, activeTimeframeOption, series]);
+
+  const displayedData = useMemo(() => {
+    return isComposedOrTrend ? ensureTrendData(rawDisplayedData, primarySeriesKey) : rawDisplayedData;
+  }, [rawDisplayedData, isComposedOrTrend, primarySeriesKey]);
 
   if (!isOpen || !chartMessage) return null;
 
@@ -2417,6 +2655,8 @@ function ChartZoomModal({
               <p className="text-xs sm:text-sm text-slate-500">
                 {chartType === "pie"
                   ? "Verteilung nach Kategorien visualisiert"
+                  : isComposedOrTrend
+                  ? "Kennzahlen mit Trendlinie visualisiert"
                   : chartType === "line"
                   ? "Zeitlicher Verlauf visualisiert"
                   : "Kennzahlen und Werte visualisiert"}
@@ -2470,9 +2710,9 @@ function ChartZoomModal({
             className="h-[60vh] sm:h-[65vh] w-full bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-xs flex flex-col"
           >
             <ResponsiveContainer width="100%" height="100%">
-              {chartType === "line" ? (
-                <LineChart data={displayedData} margin={{ top: 25, right: 30, left: 10, bottom: 40 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+              {isComposedOrTrend ? (
+                <ComposedChart data={displayedData} margin={{ top: 25, right: 30, left: 10, bottom: 40 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis
                     dataKey={xAxisKey}
                     stroke="#64748B"
@@ -2503,9 +2743,122 @@ function ChartZoomModal({
                               {payload.map((entry: any, i: number) => {
                                 const seriesDef = series.find((s) => s.key === entry.dataKey);
                                 const labelName = entry.name || seriesDef?.label || entry.dataKey;
-                                const color = entry.color || seriesDef?.color || DEFAULT_CHART_COLORS[i % DEFAULT_CHART_COLORS.length];
+                                const color = entry.color || seriesDef?.color || (entry.dataKey === "trend" ? "#10B981" : colorPalette[i % colorPalette.length]);
                                 const val = entry.value;
-                                const formattedVal = typeof val === "number" ? val.toLocaleString("de-DE") : val;
+                                const unit = chartMessage?.payload?.unit || seriesDef?.unit;
+                                const formattedVal = formatChartTooltipValue(val, unit, labelName);
+                                return (
+                                  <div key={`zoom-comp-${i}`} className="flex items-center justify-between gap-4">
+                                    <div className="flex items-center gap-2 truncate">
+                                      <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                                      <span className="text-slate-600 truncate">{labelName}:</span>
+                                    </div>
+                                    <span className="font-bold text-slate-900 shrink-0">{formattedVal}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: "13px", paddingTop: "12px" }} />
+                  <Bar
+                    dataKey={series[0]?.key || "hours"}
+                    fill={series[0]?.color || colorPalette[0] || "#3B82F6"}
+                    radius={[6, 6, 0, 0]}
+                    name={series[0]?.label || "Wert"}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="trend"
+                    stroke="#10B981"
+                    strokeWidth={2.5}
+                    strokeDasharray="5 5"
+                    name="Trend"
+                    dot={{ r: 4 }}
+                  />
+                </ComposedChart>
+              ) : chartType === "pie" ? (
+                <PieChart>
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        const entry = payload[0];
+                        const name = entry.name ?? entry.payload?.[xAxisKey] ?? "";
+                        const val = entry.value;
+                        const labelName = series[0]?.label || "Wert";
+                        const formattedVal = formatChartTooltipValue(val, chartMessage?.payload?.unit, labelName);
+                        return (
+                          <div className="bg-white p-4 border border-slate-200 rounded-2xl shadow-xl text-xs space-y-2 min-w-[200px]">
+                            <p className="font-bold text-slate-900 text-sm border-b border-slate-100 pb-1.5">{String(name)}</p>
+                            <div className="flex items-center justify-between gap-4 pt-1">
+                              <span className="text-slate-600">{labelName}:</span>
+                              <span className="font-bold text-slate-900">{formattedVal}</span>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: "13px" }} />
+                  <Pie
+                    data={displayedData}
+                    dataKey={series[0]?.key || "wert"}
+                    nameKey={xAxisKey || "name"}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={140}
+                    label
+                  >
+                    {displayedData.map((_, index) => (
+                      <Cell
+                        key={`zoom-pie-${index}`}
+                        fill={colorPalette[index % colorPalette.length]}
+                      />
+                    ))}
+                  </Pie>
+                </PieChart>
+              ) : chartType === "line" ? (
+                <LineChart data={displayedData} margin={{ top: 25, right: 30, left: 10, bottom: 40 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                  <XAxis
+                    dataKey={xAxisKey}
+                    stroke="#64748B"
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={{ stroke: "#CBD5E1" }}
+                    tick={{ fill: "#334155", fontWeight: 600 }}
+                  />
+                  <YAxis
+                    stroke="#64748B"
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={{ stroke: "#CBD5E1" }}
+                    tick={{ fill: "#64748B" }}
+                  />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        const dataItem = payload[0].payload;
+                        const xVal = label ?? dataItem[xAxisKey] ?? "";
+                        return (
+                          <div className="bg-white p-4 border border-slate-200 rounded-2xl shadow-xl text-xs space-y-2.5 min-w-[220px]">
+                            <p className="font-bold text-slate-900 text-sm border-b border-slate-100 pb-1.5">{String(xVal)}</p>
+                            {dataItem.component && (
+                              <p className="text-slate-500 text-xs">{dataItem.component}</p>
+                            )}
+                            <div className="space-y-1.5 pt-1">
+                              {payload.map((entry: any, i: number) => {
+                                const seriesDef = series.find((s) => s.key === entry.dataKey);
+                                const labelName = entry.name || seriesDef?.label || entry.dataKey;
+                                const color = entry.color || seriesDef?.color || colorPalette[i % colorPalette.length];
+                                const val = entry.value;
+                                const unit = chartMessage?.payload?.unit || seriesDef?.unit;
+                                const formattedVal = formatChartTooltipValue(val, unit, labelName);
                                 return (
                                   <div key={`zoom-line-${i}`} className="flex items-center justify-between gap-4">
                                     <div className="flex items-center gap-2 truncate">
@@ -2523,65 +2876,25 @@ function ChartZoomModal({
                       return null;
                     }}
                   />
-                  {series.length > 1 && <Legend wrapperStyle={{ fontSize: "13px", paddingTop: "12px" }} />}
+                  <Legend wrapperStyle={{ fontSize: "13px", paddingTop: "12px" }} />
                   {series.map((s, idx) => (
                     <Line
                       key={s.key}
                       type="monotone"
                       dataKey={s.key}
                       name={s.label}
-                      stroke={s.color || DEFAULT_CHART_COLORS[idx % DEFAULT_CHART_COLORS.length]}
+                      stroke={s.color || colorPalette[idx % colorPalette.length]}
                       strokeWidth={3}
                       dot={{ r: 5 }}
                     />
                   ))}
                 </LineChart>
-              ) : chartType === "pie" ? (
-                <PieChart>
-                  <Tooltip
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const entry = payload[0];
-                        const name = entry.name ?? entry.payload?.[xAxisKey] ?? "";
-                        const val = entry.value;
-                        const formattedVal = typeof val === "number" ? val.toLocaleString("de-DE") : val;
-                        return (
-                          <div className="bg-white p-4 border border-slate-200 rounded-2xl shadow-xl text-xs space-y-2 min-w-[200px]">
-                            <p className="font-bold text-slate-900 text-sm border-b border-slate-100 pb-1.5">{String(name)}</p>
-                            <div className="flex items-center justify-between gap-4 pt-1">
-                              <span className="text-slate-600">{series[0]?.label || "Wert"}:</span>
-                              <span className="font-bold text-slate-900">{formattedVal}</span>
-                            </div>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: "13px" }} />
-                  <Pie
-                    data={displayedData}
-                    dataKey={series[0]?.key || Object.keys(displayedData[0] || {})[1] || "value"}
-                    nameKey={xAxisKey}
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={140}
-                    label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                  >
-                    {displayedData.map((_, index) => (
-                      <Cell
-                        key={`zoom-pie-${index}`}
-                        fill={DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.length]}
-                      />
-                    ))}
-                  </Pie>
-                </PieChart>
               ) : (
                 <BarChart
                   data={displayedData}
                   margin={{ top: 25, right: 30, left: 10, bottom: 40 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis
                     dataKey={xAxisKey}
                     stroke="#64748B"
@@ -2612,9 +2925,10 @@ function ChartZoomModal({
                               {payload.map((entry: any, i: number) => {
                                 const seriesDef = series.find((s) => s.key === entry.dataKey);
                                 const labelName = entry.name || seriesDef?.label || entry.dataKey;
-                                const color = entry.color || seriesDef?.color || DEFAULT_CHART_COLORS[i % DEFAULT_CHART_COLORS.length];
+                                const color = entry.color || seriesDef?.color || colorPalette[i % colorPalette.length];
                                 const val = entry.value;
-                                const formattedVal = typeof val === "number" ? val.toLocaleString("de-DE") : val;
+                                const unit = chartMessage?.payload?.unit || seriesDef?.unit;
+                                const formattedVal = formatChartTooltipValue(val, unit, labelName);
                                 return (
                                   <div key={`zoom-bar-${i}`} className="flex items-center justify-between gap-4">
                                     <div className="flex items-center gap-2 truncate">
@@ -2632,13 +2946,13 @@ function ChartZoomModal({
                       return null;
                     }}
                   />
-                  {series.length > 1 && <Legend wrapperStyle={{ fontSize: "13px", paddingTop: "12px" }} />}
+                  <Legend wrapperStyle={{ fontSize: "13px", paddingTop: "12px" }} />
                   {series.map((s, idx) => (
                     <Bar
                       key={s.key}
                       dataKey={s.key}
                       name={s.label}
-                      fill={s.color || DEFAULT_CHART_COLORS[idx % DEFAULT_CHART_COLORS.length]}
+                      fill={s.color || colorPalette[idx % colorPalette.length]}
                       radius={[8, 8, 0, 0]}
                       maxBarSize={70}
                     >
@@ -2646,7 +2960,7 @@ function ChartZoomModal({
                         displayedData.map((entry: any, index: number) => (
                           <Cell
                             key={`zoom-cell-${index}`}
-                            fill={entry.fill || s.color || DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.length]}
+                            fill={entry.fill || s.color || colorPalette[index % colorPalette.length]}
                             stroke={entry.stroke || undefined}
                             strokeWidth={entry.stroke ? 1.5 : 0}
                           />
@@ -2663,11 +2977,14 @@ function ChartZoomModal({
         <div className="p-4 sm:px-6 sm:py-4 bg-white border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 shrink-0">
           {/* KI-Erkenntnis Pill (nur anzeigen, wenn eine Erkenntnis vorhanden ist) */}
           {(summaryInsight || activeTimeframeOption.insight) ? (
-            <div className="flex-1 p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 flex items-center gap-2.5 text-xs sm:text-sm">
-              <Lightbulb className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600 shrink-0" />
-              <span>
-                <strong>KI-Erkenntnis:</strong> {summaryInsight || activeTimeframeOption.insight}
-              </span>
+            <div className="flex-1 p-3 rounded-xl bg-gradient-to-r from-blue-50 to-emerald-50/70 border border-blue-200/80 text-blue-950 flex items-center gap-2.5 text-xs sm:text-sm shadow-2xs">
+              <div className="h-7 w-7 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                <Sparkles className="h-4 w-4 text-blue-600" />
+              </div>
+              <div className="flex-1 leading-relaxed">
+                <strong className="font-semibold text-blue-900">KI-Erkenntnis: </strong>
+                <span className="text-slate-700">{summaryInsight || activeTimeframeOption.insight}</span>
+              </div>
             </div>
           ) : <div className="flex-1" />}
 

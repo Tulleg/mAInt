@@ -19,3 +19,11 @@
    - Agent 5 (Docs & Compliance): `docs/`, `README.md`
 7. **Verifikation**: Nach jeder Aufgabe müssen `npx tsc --noEmit` und `npx vitest run` fehlerfrei durchlaufen.
 8. **Git Commit:** Committe deine Änderungen mit aussagekräftigen Beschreibeungen
+
+# Strikte Git-Commit-Pflicht für alle Agenten:
+- Sobald deine Änderungen implementiert sind und `npx tsc --noEmit` fehlerfrei durchläuft, MUSST du deine Arbeit unaufgefordert per Git committen.
+- Führe dafür direkt im Terminal aus:
+  1. `git status`
+  2. `git add <nur geänderte/erstellte Dateien deiner Domäne>`
+  3. `git commit -m "<agent-kürzel>: <präzise beschreibung der änderung>"`
+- Beende eine Aufgabe niemals mit ungespeicherten oder uncommitted Git-Diffs.

@@ -292,8 +292,9 @@ Das KI-Subsystem teilt sich in drei primäre Anwendungsfälle:
    - Erkennt Duplikate bei offenen Meldungen und schlägt bewährte Lösungen sowie Ersatzteile inklusive Konfidenzwert vor.
 2. **Prompt-to-Chart / Natural Language SQL (`src/lib/ai/analytics-agent.ts`):**
    - Übersetzt freitextliche Anfragen (z. B. *"Zeige mir die Ausfallzeiten der Stanzen im 3. Quartal"*) in sichere, schreibgeschützte SQL-Queries gegen PostgreSQL.
-   - Validiert das SQL (Verbot von `INSERT`, `UPDATE`, `DROP`, `ALTER`).
-   - Formatiert das Ergebnis in konfigurierte Recharts-Visualisierungen (Balken-, Linien-, Tortendiagramme).
+   - **Geführter Klärungsdialog (Clarification Loop):** Erkennt unvollständige Anfragen (*"Zeige mir ein Diagramm"*) und schaltet in den Status `NEEDS_CLARIFICATION` mit strukturierten 1-Klick-Optionen für Diagrammtyp, Kennzahlen, Bereich/Maschine, Trendlinie und Farben.
+   - Validiert das SQL über gehärtete AST-Guards (strikter Schreibschutz: Verbot von `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, Mandanten-Isolation `tenant_id`).
+   - Formatiert das Ergebnis in konfigurierte Recharts-Visualisierungen (Balken-, Linien-, Torten- und Composed-Diagramme mit Trendlinien-Overlay) unter Übergabe von `hasTrendline`, `trendlineKey` und `colorPalette`.
 3. **Predictive Maintenance Analyzer (`src/lib/ai/predictive.ts`):**
    - Berechnet MTBF (Mean Time Between Failures), MTTR (Mean Time To Repair) und Ausfallwahrscheinlichkeiten basierend auf Zyklen und Betriebsstunden.
 
@@ -845,6 +846,49 @@ sequenceDiagram
     Shell-->>User: Rendert Begrüßungszeile im Header
 ```
 
+### 6.6 Analytics-Pipeline: Prompt-to-Chart mit interaktivem Klärungsdialog (Clarification Loop)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Instandhalter / Meister
+    participant UI as SingleInputWorkspace (UI)
+    participant Action as copilot-actions.ts (executeSingleInputCopilotAction)
+    participant Router as copilot.ts (classifyCopilotIntent)
+    participant Agent as analytics-agent.ts (executeAnalyticsPrompt)
+    participant DB as PostgreSQL (Drizzle)
+
+    User->>UI: Eingabe: "Zeige mir ein Diagramm"
+    UI->>Action: executeSingleInputCopilotAction({ prompt, chatHistory })
+    Action->>Router: classifyCopilotIntent(prompt) -> Intent: ANALYTICS_CHART
+    Action->>Agent: executeAnalyticsPrompt({ tenantId, userPrompt, chatHistory })
+    
+    alt Unvollständige Anfrage (Fehlender Typ, Metrik oder Bereich)
+        Agent->>Agent: status = "NEEDS_CLARIFICATION"
+        Agent-->>Action: { status: "NEEDS_CLARIFICATION", clarificationQuestion, suggestedClarifications }
+        Action-->>UI: { needsClarification: true, clarificationQuestion, clarificationOptions }
+        UI-->>User: Rendert Klärungsfrage & 1-Klick-Chips (Typ, Werte, Bereich, Trend, Farben)
+        
+        User->>UI: Klick auf Chip: "Liniendiagramm mit Trendlinie: Störungen letzte 30 Tage (Gesamtes Werk, Blau/Grün)"
+        UI->>Action: executeSingleInputCopilotAction({ prompt: Chip-Text, conversationHistory })
+        Action->>Router: classifyCopilotIntent(followUp) -> Intent: ANALYTICS_CHART
+        Action->>Agent: executeAnalyticsPrompt({ tenantId, followUp, chatHistory: [...] })
+    end
+
+    Note over Agent,DB: Vollständige Parameter vorhanden -> SQL-Generierung & Ausführung
+    Agent->>Agent: Parsen: chartType = "line", hasTrendline = true, colorPalette = ["#3B82F6", "#10B981"]
+    Agent->>Agent: Validiere Read-Only Guard & injiziere tenantId = '...'
+    Agent->>DB: SELECT TO_CHAR(created_at, 'IW') AS tag, COUNT(id) AS stoerungen FROM maintenance_orders...
+    DB-->>Agent: Result Rows
+    opt hasTrendline aktiv
+        Agent->>Agent: ensureTrendData(): Berechne lineare Regression (trend)
+    end
+    Agent-->>Action: { status: "SUCCESS", chartType: "line", data, series, hasTrendline: true, colorPalette, summaryInsight }
+    Action->>Action: Baue ChartViewWidgetPayload (type: "chart_view", config, series, colors)
+    Action-->>UI: SingleInputExecutionResult mit widget: ChartViewWidgetPayload
+    UI-->>User: Rendert Recharts-Liniendiagramm mit Trendlinie & Toolbar (Export, Favorit, Zoom)
+```
+
 ---
 
 ## 7. Verteilungssicht & Infrastruktur (Deployment)
@@ -981,6 +1025,7 @@ Dieses Dokument unterliegt der verbindlichen Entwicklungsrichtlinie gemäß [`.g
 
 | Version | Datum | Bearbeiter / Agent | Durchgeführte Änderungen |
 |---|---|---|---|
+| **1.6.0** | 2026-10-25 | Technical Documentation & Compliance Agent | **Interaktiver Diagramm-Assistent, Clarification Loop & DB-Indizierung:**<br>1. **Geführter Klärungsdialog (Clarification Loop & Subsystem 4.2.5):** Erweiterung des Analytics-Agenten (`analytics-agent.ts`) und der Server Action `executeSingleInputCopilotAction` um den Zweig `status === "NEEDS_CLARIFICATION"`. Bei unvollständigen Diagrammwünschen erfolgt eine strukturierte Rückfrage nach den 5 Dimensionen (Diagrammtyp, Werte/Kennzahlen, Bereich/Maschine, Trendlinie, Farben) inkl. 1-Klick-Chips (`field: "general"`).<br>2. **Laufzeit- & Sequenzsicht (Abschnitt 6.6):** Neues Sequenzdiagramm 6.6 für die vollständige Analytics-Pipeline mit Klärungsschleife, Multi-Turn-Auflösung und Parameterübergabe (`hasTrendline`, `trendlineKey`, `colorPalette`).<br>3. **Recharts-Visualisierung:** Unterstützung von `bar`, `line`, `pie` (mit Ampelfarben-Segmenten) und `composed` mit dynamischem Trend-Overlay (`ensureTrendData`).<br>4. **Datenbank-Härtung (Schema & Indizes):** Ergänzung hochperformanter Indizes für `maintenance_orders` (`floc`, `priority`, `created_at`, `downtime`), `equipments` (`name`), `functional_locations` (`name`, `area`) sowie `order_spare_part_bookings` & `spare_parts` (`moving_average_price`, `quantity_consumed`, `tenant_id`). |
 | **1.5.0** | 2026-10-23 | Technical Documentation & Compliance Agent | **Widescreen- & Leitstand-Optimierung des Conversational Assistant Workspace:**<br>1. **Großbildschirm-Layout (Subsystem 4.2.9 & ADR-06):** Dokumentation der dynamischen Skalierung des zentralen Chat-Scrollcontainers und der Sticky-Eingabeleiste auf bis zu `2xl:max-w-[1600px]` (`px-4 sm:px-6 lg:px-8`).<br>2. **Aufhebung der Breitenbegrenzung für Datenkarten:** Erweiterung des KI-Karten-Wrappers von `max-w-3xl` (768px) auf `max-w-5xl xl:max-w-6xl 2xl:max-w-7xl` für Recharts-Analytics-Diagramme, interaktive Auftragstabellen und Störungs-Drafts.<br>3. **Fluchtendes UI-Design & Hero-Screen:** Ausrichtung der Benutzer-Prompts (`max-w-2xl xl:max-w-3xl`), Angleichung der Begrüßungs-Hero-Breite (`max-w-4xl`) und bündige Fluchtung der Sticky-Bottom-Leiste mit dem Chat-Stream.<br>4. **Anwender-Synchronisation:** Nachführung im Betriebshandbuch `docs/08-ki-stoerungserfassung.md` und in `docs/design-rules.md`. |
 | **1.4.0** | 2026-10-23 | Technical Documentation & Compliance Agent | **Client-seitige Multi-Format-Export-Engine (Diagramme & Tabellen):**<br>1. **Subsystem 4.2.11 (`src/lib/export-utils.ts`):** Dokumentation der Schnittstellendefinitionen für `exportChartToPng`, `exportChartToPdf`, `exportTableToCsv` und `exportTableToExcel` inklusive Typisierungen, Funktionssignaturen und Formatierungs-Pipelines.<br>2. **Offline- & DSGVO-Compliance:** Festhaltung der 100% browser- und client-seitigen Rendering-Architektur (DOM Canvas, `jsPDF`, SheetJS/`xlsx`) ohne externe Cloud-Dienste oder Datenübertragungen.<br>3. **Anwender-Handbuch:** Synchronisation mit `docs/05-ai-copilot-analytics.md` bezüglich der UI-Dropdowns im Workspace und Vollbild-Zoom-Modal (A4-Querformat Management-Summary mit Zeitstempel, 2x Retina-PNG, Excel-Auto-Breiten und RFC-4180 CSV mit UTF-8-BOM). |
 | **1.3.0** | 2026-10-23 | Technical Documentation & Compliance Agent | **Resiliente KI-Schichtbegrüßung, Offline-Idempotenz & AST-SQL-Security-Guards:**<br>1. **KI-Schichtbegrüßung & ADR-07:** Verankerung von ADR-07 und Dokumentation des Subsystems 4.2.10 (`src/actions/greeting-actions.ts`, `src/lib/ai/greeting.ts`, `src/lib/greeting-utils.ts`) inklusive 3.5s Timeout-Guard und deterministischem Fallback-Pool.<br>2. **Laufzeit- & Sequenzsicht:** Ergänzung der Sequenzdiagramme 6.4 (Ersatzteilbuchung mit SAP-Outbox-Failover & Idempotenz) und 6.5 (Dynamische Schichtbegrüßung mit Timeout-Schutz).<br>3. **Security- & Idempotenz-Härtungen:** Dokumentation der Idempotenz-Absicherung (`clientMutationId` & `clientBookingOfflineId`) gegen Doppelbuchungen sowie des AST-Level Read-Only Guards gegen SQL-Injections im Analytics-Agenten. |

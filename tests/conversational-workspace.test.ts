@@ -1,11 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
-import { classifyCopilotInputAction } from "../src/actions/copilot-actions";
+import { classifyCopilotInputAction, executeSingleInputCopilotAction } from "../src/actions/copilot-actions";
 import {
   exportTableToCsv,
   createExcelWorkbook,
   formatPriorityLabel,
 } from "../src/lib/export-utils";
 import type { OrderWithRelations } from "../src/actions/order-actions";
+import {
+  DEFAULT_PALETTE,
+  formatChartTooltipValue,
+  ensureTrendData,
+  getClarificationOptionIconType,
+} from "../src/lib/chart-utils";
+import type { ClarificationOption } from "../src/lib/ai/copilot";
 
 describe("Conversational Single-Input Workspace Integration Tests", () => {
   it("should classify orders query intent correctly with fallback logic", async () => {
@@ -114,6 +121,110 @@ describe("Conversational Single-Input Workspace Integration Tests", () => {
       const sheet = wb.Sheets["Aufträge"];
       expect(sheet).toBeDefined();
       expect(sheet["!cols"]).toHaveLength(6);
+    });
+  });
+
+  describe("Interactive Clarification Chips & Chart Rendering Helpers", () => {
+    it("should classify clarification chip icons correctly based on option content", () => {
+      const pieOpt: ClarificationOption = { id: "pie-1", label: "Kuchendiagramm (Störungsursachen)", value: "Kuchendiagramm", field: "general" };
+      const trendOpt: ClarificationOption = { id: "trend-1", label: "Balken mit Trendlinie", value: "Mit Trendlinie", field: "general" };
+      const paletteOpt: ClarificationOption = { id: "col-1", label: "Farbschema Smaragdgrün", value: "Smaragdgrün", field: "general" };
+      const barOpt: ClarificationOption = { id: "bar-1", label: "Balkendiagramm (Vergleich)", value: "Balkendiagramm", field: "general" };
+      const eqOpt: ClarificationOption = { id: "eq-1", label: "KUKA Roboter 01", value: "KUKA Roboter 01", field: "equipment" };
+      const areaOpt: ClarificationOption = { id: "area-1", label: "Halle 1 Rohbau", value: "Halle 1", field: "area" };
+      const defOpt: ClarificationOption = { id: "def-1", label: "Details ansehen", value: "Details", field: "general" };
+
+      expect(getClarificationOptionIconType(pieOpt)).toBe("pie");
+      expect(getClarificationOptionIconType(trendOpt)).toBe("trend");
+      expect(getClarificationOptionIconType(paletteOpt)).toBe("palette");
+      expect(getClarificationOptionIconType(barOpt)).toBe("bar");
+      expect(getClarificationOptionIconType(eqOpt)).toBe("equipment");
+      expect(getClarificationOptionIconType(areaOpt)).toBe("area");
+      expect(getClarificationOptionIconType(defOpt)).toBe("default");
+    });
+
+    it("should calculate regression trendline data when trendline is missing", () => {
+      const rawData = [
+        { monat: "Jan", hours: 10 },
+        { monat: "Feb", hours: 20 },
+        { monat: "Mär", hours: 30 },
+      ];
+
+      const withTrend = ensureTrendData(rawData, "hours");
+      expect(withTrend).toHaveLength(3);
+      expect(withTrend[0].trend).toBeDefined();
+      expect(typeof withTrend[0].trend).toBe("number");
+      // Bei streng linearer Steigerung 10 -> 20 -> 30 muss Trend exakt 10, 20, 30 sein
+      expect(withTrend[0].trend).toBe(10);
+      expect(withTrend[1].trend).toBe(20);
+      expect(withTrend[2].trend).toBe(30);
+    });
+
+    it("should preserve existing trend data if already present in dataset", () => {
+      const existing = [
+        { tag: "Mo", hours: 5, trend: 12 },
+        { tag: "Di", hours: 15, trend: 14 },
+      ];
+      const result = ensureTrendData(existing, "hours");
+      expect(result[0].trend).toBe(12);
+      expect(result[1].trend).toBe(14);
+    });
+
+    it("should gracefully handle empty datasets in ensureTrendData", () => {
+      expect(ensureTrendData([])).toEqual([]);
+    });
+
+    it("should format chart tooltip values correctly with German localization and inferred units", () => {
+      // Explizite Einheiten
+      expect(formatChartTooltipValue(45, "Min.")).toBe("45 Min.");
+      expect(formatChartTooltipValue(2.5, "Std.")).toBe("2,5 Std.");
+      expect(formatChartTooltipValue(1500, "€")).toBe("1.500 €");
+
+      // Abgeleitet aus Metriknamen
+      expect(formatChartTooltipValue(120, undefined, "Stillstand (Minuten)")).toBe("120 Min.");
+      expect(formatChartTooltipValue(4.8, undefined, "Ausfallzeit (h)")).toBe("4,8 Std.");
+      expect(formatChartTooltipValue(6800, undefined, "Gesamtkosten (€)")).toBe("6.800 €");
+      expect(formatChartTooltipValue(15, undefined, "Anzahl Störungen")).toBe("15 Stk.");
+
+      // Standard ohne Einheit
+      expect(formatChartTooltipValue(42, undefined, "Unbekannt")).toBe("42");
+    });
+
+    it("should provide a standard color palette with at least 6 distinct hex colors", () => {
+      expect(DEFAULT_PALETTE.length).toBeGreaterThanOrEqual(6);
+      expect(DEFAULT_PALETTE[0]).toBe("#3B82F6");
+      DEFAULT_PALETTE.forEach((color) => {
+        expect(color).toMatch(/^#[0-9A-Fa-f]{6}$/);
+      });
+    });
+
+    it("should generate a pie chart view with color palette and summary insight for pie queries", async () => {
+      const response = await executeSingleInputCopilotAction({
+        prompt: "Erstelle ein Kuchendiagramm der Störungsursachen in Halle 1",
+      });
+
+      expect(response).toBeDefined();
+      expect(response.type).toBe("chart_view");
+      expect(response.chartType).toBe("pie");
+      expect(response.chartData).toBeDefined();
+      expect(response.chartData?.length).toBeGreaterThan(0);
+      expect(response.chartConfig?.colorPalette).toBeDefined();
+      expect((response.widget as any)?.summaryInsight).toBeTruthy();
+    });
+
+    it("should generate a composed chart with trendline for trend queries", async () => {
+      const response = await executeSingleInputCopilotAction({
+        prompt: "Zeige mir den Stillstand von KUKA Roboter 01 mit Trendlinie",
+      });
+
+      expect(response).toBeDefined();
+      expect(response.type).toBe("chart_view");
+      const hasTrend =
+        response.chartType === "composed" ||
+        Boolean((response.widget as any)?.hasTrendline) ||
+        Boolean(response.chartConfig?.hasTrendline);
+      expect(hasTrend).toBe(true);
+      expect(response.chartData?.length).toBeGreaterThan(0);
     });
   });
 });

@@ -126,9 +126,15 @@ export interface SingleInputExecutionResult {
   functionalLocation?: string;
   suggestedDamageCode?: string;
   // Direkte Felder für type: 'chart_view'
-  chartType?: "bar" | "line" | "pie" | "kpi" | "table";
+  chartType?: "bar" | "line" | "pie" | "kpi" | "table" | "composed";
   chartConfig?: Record<string, any>;
   chartData?: any[];
+  hasTrendline?: boolean;
+  trendlineKey?: string;
+  colorPalette?: string[];
+  series?: Array<{ key: string; label: string; color?: string }>;
+  xAxisKey?: string;
+  summaryInsight?: string;
   // Direkte Felder für type: 'table_view'
   orders?: DashboardOrderResultItem[];
   totalFound?: number;
@@ -190,6 +196,45 @@ export async function classifyCopilotInputAction(
         functionalLocation: result.widget.functionalLocation,
         suggestedDamageCode: result.widget.suggestedDamageCode,
       });
+    }
+
+    if (result.intent === "ANALYTICS_CHART" && !actionResult.needsClarification) {
+      try {
+        const rawHistory = safePayload.chatHistory || safePayload.conversationHistory || [];
+        const chatHistory = rawHistory
+          .filter((m: any) => m && (m.role === "user" || m.role === "assistant"))
+          .map((m: any) => ({
+            role: m.role as "user" | "assistant",
+            content: typeof m.content === "string" ? m.content : typeof m.text === "string" ? m.text : "",
+          }));
+        const analyticsRes = await executeAnalyticsPrompt({
+          tenantId: safePayload.tenantId || "demo-tenant-1000",
+          userPrompt: safePayload.prompt || "",
+          chatHistory,
+        });
+        if (analyticsRes.status === "NEEDS_CLARIFICATION") {
+          const q = analyticsRes.clarificationQuestion || "Bitte spezifizieren Sie Ihre Anfrage für das Diagramm:";
+          const opts: ClarificationOption[] = (analyticsRes.suggestedClarifications || []).map((item, idx) => ({
+            id: `clarification-opt-${idx + 1}`,
+            label: item,
+            value: item,
+            field: "general" as const,
+          }));
+          actionResult.needsClarification = true;
+          actionResult.clarificationQuestion = q;
+          actionResult.clarificationOptions = opts;
+          actionResult.clarification = {
+            needed: true,
+            needsClarification: true,
+            question: q,
+            clarificationQuestion: q,
+            options: opts,
+            field: "general",
+          };
+        }
+      } catch {
+        // Fallback
+      }
     }
 
     return actionResult;
@@ -485,6 +530,8 @@ export async function executeSingleInputCopilotAction(
   if (classification.intent === "ANALYTICS_CHART") {
     try {
       const userPrompt =
+        safePayload.clarificationResponse ||
+        (safePayload.clarificationSelection?.value) ||
         classification.analyticsChart?.analyticsPrompt ||
         safePayload.prompt ||
         "";
@@ -540,15 +587,28 @@ export async function executeSingleInputCopilotAction(
       }
 
       // Bei Erfolg (status === "SUCCESS" bzw. Standard-Ergebnis):
-      const validChartTypes = ["bar", "line", "pie", "table"] as const;
+      const lowerPrompt = (userPrompt || safePayload.prompt || "").toLowerCase();
+      const hasTrendline =
+        Boolean(analyticsResult?.hasTrendline) ||
+        lowerPrompt.includes("trend") ||
+        lowerPrompt.includes("trendlinie");
+
+      const trendlineKey =
+        analyticsResult?.trendlineKey || (hasTrendline ? "trend" : undefined);
+
+      const validChartTypes = ["bar", "line", "pie", "table", "composed", "kpi"] as const;
       type ValidChartType = (typeof validChartTypes)[number];
-      const chartType: ValidChartType = validChartTypes.includes(
+      let chartType: ValidChartType = validChartTypes.includes(
         analyticsResult?.chartType as ValidChartType
       )
         ? (analyticsResult.chartType as ValidChartType)
         : (validChartTypes.includes(classification.analyticsChart?.chartType as ValidChartType)
             ? (classification.analyticsChart?.chartType as ValidChartType)
             : "bar");
+
+      if (hasTrendline && chartType !== "pie") {
+        chartType = "composed";
+      }
 
       const title =
         analyticsResult?.title ||
@@ -562,16 +622,18 @@ export async function executeSingleInputCopilotAction(
 
       const xAxisKey = analyticsResult?.xAxisKey || "name";
 
-      const validColors = [
+      const defaultColors = [
         "#3B82F6",
         "#10B981",
         "#F59E0B",
         "#EF4444",
         "#8B5CF6",
-        "#EC4899",
-        "#14B8A6",
-        "#F97316",
       ];
+
+      const colorPalette =
+        analyticsResult?.colorPalette && analyticsResult.colorPalette.length > 0
+          ? analyticsResult.colorPalette
+          : defaultColors;
 
       let series: Array<{ key: string; label: string; color: string }> = [];
       if (
@@ -582,7 +644,7 @@ export async function executeSingleInputCopilotAction(
         series = analyticsResult.series.map((s, idx) => ({
           key: s.key || `value_${idx}`,
           label: s.label || s.key || "Wert",
-          color: s.color || validColors[idx % validColors.length],
+          color: s.color || colorPalette[idx % colorPalette.length],
         }));
       }
 
@@ -591,12 +653,13 @@ export async function executeSingleInputCopilotAction(
           {
             key: "value",
             label: classification.analyticsChart?.metric || "Wert",
-            color: "#3B82F6",
+            color: colorPalette[0],
           },
         ];
       }
 
-      const summary = analyticsResult?.summaryInsight || classification.explanation || "";
+      const summaryInsight =
+        analyticsResult?.summaryInsight || classification.explanation || "";
       const rawSql = analyticsResult?.rawSqlUsed;
 
       const chartViewWidget: ChartViewWidgetPayload = {
@@ -607,10 +670,18 @@ export async function executeSingleInputCopilotAction(
         data: chartData,
         xAxisKey,
         series,
+        hasTrendline,
+        trendlineKey,
+        colorPalette,
+        summaryInsight,
         config: {
           chartType,
           xAxisKey,
           series,
+          hasTrendline,
+          trendlineKey,
+          colorPalette,
+          colors: colorPalette,
           responsive: true,
           margin: { top: 12, right: 24, left: 0, bottom: 24 },
           grid: { strokeDasharray: "3 3", stroke: "#e2e8f0" },
@@ -622,9 +693,8 @@ export async function executeSingleInputCopilotAction(
             },
           },
           legend: { verticalAlign: "top", height: 36 },
-          colors: validColors,
         },
-        summary,
+        summary: summaryInsight,
         rawSql,
       };
 
@@ -634,6 +704,12 @@ export async function executeSingleInputCopilotAction(
       result.chartType = chartType;
       result.chartConfig = chartViewWidget.config;
       result.chartData = chartData;
+      result.xAxisKey = xAxisKey;
+      result.series = series;
+      result.hasTrendline = hasTrendline;
+      result.trendlineKey = trendlineKey;
+      result.colorPalette = colorPalette;
+      result.summaryInsight = summaryInsight;
     } catch (err: any) {
       console.warn(
         "[Copilot Action] Analytics Ausführung fehlgeschlagen, liefere sichere Fallback-Struktur:",
@@ -691,6 +767,11 @@ export async function executeSingleInputCopilotAction(
       result.chartType = fallbackChartType;
       result.chartConfig = chartViewWidget.config;
       result.chartData = fallbackData;
+      result.xAxisKey = "name";
+      result.series = fallbackSeries;
+      result.hasTrendline = false;
+      result.colorPalette = ["#3B82F6", "#EF4444", "#10B981"];
+      result.summaryInsight = fallbackSummary;
     }
   }
 

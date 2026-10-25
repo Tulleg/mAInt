@@ -397,6 +397,8 @@ export const functionalLocations = pgTable(
   (table) => [
     uniqueIndex("idx_floc_tenant_code").on(table.tenantId, table.code),
     index("idx_floc_area").on(table.areaId),
+    index("idx_floc_tenant_area").on(table.tenantId, table.areaId),
+    index("idx_floc_tenant_name").on(table.tenantId, table.name),
     index("idx_floc_parent").on(table.parentFunctionalLocationId),
     index("idx_floc_sap_id").on(table.tenantId, table.sapId),
     index("idx_floc_sap_tplnr").on(table.tenantId, table.sapTplnr),
@@ -455,6 +457,7 @@ export const equipments = pgTable(
       table.tenantId,
       table.equipmentNumber
     ),
+    index("idx_equipments_tenant_name").on(table.tenantId, table.name),
     index("idx_equipments_floc").on(table.functionalLocationId),
     index("idx_equipments_sap_id").on(table.tenantId, table.sapId),
     index("idx_equipments_sap_nr").on(table.tenantId, table.sapEquipmentNr),
@@ -535,6 +538,11 @@ export const spareParts = pgTable(
     uniqueIndex("idx_spare_parts_tenant_part_nr").on(
       table.tenantId,
       table.internalPartNumber
+    ),
+    index("idx_spare_parts_tenant_name").on(table.tenantId, table.name),
+    index("idx_spare_parts_tenant_price").on(
+      table.tenantId,
+      table.movingAveragePrice
     ),
     index("idx_spare_parts_sap_matnr").on(table.tenantId, table.sapMaterialNr),
   ]
@@ -937,6 +945,16 @@ export const maintenanceOrders = pgTable(
     ),
     index("idx_maint_orders_status").on(table.tenantId, table.currentStatusId),
     index("idx_maint_orders_equipment").on(table.tenantId, table.equipmentId),
+    index("idx_maint_orders_floc").on(
+      table.tenantId,
+      table.functionalLocationId
+    ),
+    index("idx_maint_orders_priority").on(table.tenantId, table.priority),
+    index("idx_maint_orders_created_at").on(table.tenantId, table.createdAt),
+    index("idx_maint_orders_downtime").on(
+      table.tenantId,
+      table.downtimeMinutes
+    ),
     index("idx_maint_orders_assigned_user").on(
       table.tenantId,
       table.assignedToUserId
@@ -1037,6 +1055,19 @@ export const orderSparePartBookings = pgTable(
   (table) => [
     index("idx_order_spare_bookings_order").on(table.maintenanceOrderId),
     index("idx_order_spare_bookings_part").on(table.sparePartId),
+    index("idx_order_spare_bookings_tenant").on(table.tenantId),
+    index("idx_order_spare_bookings_tenant_part").on(
+      table.tenantId,
+      table.sparePartId
+    ),
+    index("idx_order_spare_bookings_tenant_order").on(
+      table.tenantId,
+      table.maintenanceOrderId
+    ),
+    index("idx_order_spare_bookings_quantity").on(
+      table.tenantId,
+      table.quantityConsumed
+    ),
     uniqueIndex("idx_order_spare_bookings_offline_id").on(
       table.tenantId,
       table.clientBookingOfflineId
